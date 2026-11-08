@@ -1,7 +1,10 @@
 /**
  * Browser-Locker - Background Service Worker (Manifest V3)
- * Bulletproof Window-Close Detection, Strict Single-Tab Prison,
- * Anti-Tamper Protection, and Instant Startup Locking.
+ * Fullscreen Toolbar-Free Kiosk Architecture:
+ * - Hides/minimizes normal windows to eliminate the extensions toolbar & "Remove from Chrome" option.
+ * - Spawns a dedicated toolbar-free fullscreen popup window for lock.html.
+ * - Inescapable focus trap & anti-bypass guard (closing lock window terminates the browser).
+ * - Smooth restoration of normal windows upon valid password verification.
  */
 
 import { verifyPassword } from './crypto.js';
@@ -31,6 +34,16 @@ const TAMPER_PREFIXES = [
   'about:addons'
 ];
 
+// In-memory reference to the active fullscreen lock window
+let lockWindowId = null;
+
+// Rehydrate lockWindowId from storage upon Service Worker wake-up
+chrome.storage.local.get(['lockWindowId', 'isLocked']).then((data) => {
+  if (data.isLocked && data.lockWindowId) {
+    lockWindowId = data.lockWindowId;
+  }
+});
+
 /**
  * Checks if the vault is configured with a master password.
  * @returns {Promise<boolean>}
@@ -41,7 +54,7 @@ async function isVaultConfigured() {
 }
 
 /**
- * Retrieves the current lock state from storage.local.
+ * Retrieves current lock state from storage.local.
  * @returns {Promise<boolean>}
  */
 async function getLockState() {
@@ -84,104 +97,78 @@ function isTamperUrl(url) {
 }
 
 /**
- * Enforces strict lock across all windows:
- * Keeps lock.html active and closes other tabs to maintain a single-tab prison.
+ * Minimizes all normal browser windows so that no tabs, bookmarks,
+ * or extension toolbars ("Remove from Chrome") are visible or accessible.
+ */
+async function minimizeNormalWindows() {
+  try {
+    const windows = await chrome.windows.getAll();
+    for (const w of windows) {
+      if (w.id !== lockWindowId) {
+        if (w.incognito) {
+          try { await chrome.windows.remove(w.id); } catch (_) {}
+        } else {
+          try { await chrome.windows.update(w.id, { state: 'minimized' }); } catch (_) {}
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Browser-Locker] minimizeNormalWindows error:', err);
+  }
+}
+
+/**
+ * Enforces the Fullscreen Toolbar-Free Kiosk Lock:
+ * 1. Minimizes all normal browser windows.
+ * 2. Focuses existing lock window or creates a dedicated type: 'popup', state: 'fullscreen' window.
  */
 async function enforceLock() {
+  const configured = await isVaultConfigured();
+  if (!configured) return;
+
   const lockUrl = chrome.runtime.getURL('lock.html');
 
   try {
-    const windows = await chrome.windows.getAll({ populate: true });
-
-    for (const win of windows) {
-      if (win.incognito) {
-        try {
-          await chrome.windows.remove(win.id);
-        } catch (_) {}
-        continue;
-      }
-
-      const tabs = win.tabs || [];
-      const lockTabs = tabs.filter(t => t.url && t.url.startsWith(lockUrl));
-
-      if (lockTabs.length > 0) {
-        // Focus the first lock tab
-        const primaryLock = lockTabs[0];
-        await chrome.tabs.update(primaryLock.id, { active: true });
-
-        // Close all other tabs in this window (single-tab prison)
-        for (const t of tabs) {
-          if (t.id !== primaryLock.id) {
-            try {
-              await chrome.tabs.remove(t.id);
-            } catch (_) {}
-          }
+    // Check if an existing lock window is still alive
+    if (lockWindowId) {
+      try {
+        const existing = await chrome.windows.get(lockWindowId);
+        if (existing) {
+          await minimizeNormalWindows();
+          await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+          return;
         }
-      } else if (tabs.length > 0) {
-        // No lock tab in this window: update the active tab to lock.html
-        const activeTab = tabs.find(t => t.active) || tabs[0];
-        if (activeTab.url && (activeTab.url.startsWith('http://') || activeTab.url.startsWith('https://'))) {
-          await chrome.storage.session.set({ intendedUrl: activeTab.url });
-        }
-        await chrome.tabs.update(activeTab.id, { url: lockUrl });
-
-        // Close any other tabs in this window
-        for (const t of tabs) {
-          if (t.id !== activeTab.id) {
-            try {
-              await chrome.tabs.remove(t.id);
-            } catch (_) {}
-          }
-        }
-      } else {
-        await chrome.tabs.create({ windowId: win.id, url: lockUrl, active: true });
+      } catch (_) {
+        lockWindowId = null;
       }
     }
+
+    // Minimize normal windows before presenting the lock window
+    await minimizeNormalWindows();
+
+    // Create the toolbar-free, extension-free popup window in fullscreen state
+    const lockWin = await chrome.windows.create({
+      url: lockUrl,
+      type: 'popup',
+      state: 'fullscreen',
+      focused: true
+    });
+
+    lockWindowId = lockWin.id;
+    await chrome.storage.local.set({ lockWindowId: lockWin.id });
+
+    // Explicitly re-enforce fullscreen state in case the platform creates it maximized
+    try {
+      await chrome.windows.update(lockWin.id, { state: 'fullscreen', focused: true });
+    } catch (_) {}
   } catch (err) {
     console.error('[Browser-Locker] enforceLock error:', err);
   }
 }
 
 /**
- * Enforces lock on a specific newly created window.
- * @param {number} windowId 
- */
-async function enforceLockOnWindow(windowId) {
-  const lockUrl = chrome.runtime.getURL('lock.html');
-  try {
-    const win = await chrome.windows.get(windowId, { populate: true });
-    if (win.incognito) {
-      try {
-        await chrome.windows.remove(win.id);
-      } catch (_) {}
-      return;
-    }
-
-    const tabs = win.tabs || [];
-    if (tabs.length > 0) {
-      const firstTab = tabs[0];
-      if (firstTab.url && (firstTab.url.startsWith('http://') || firstTab.url.startsWith('https://'))) {
-        await chrome.storage.session.set({ intendedUrl: firstTab.url });
-      }
-      await chrome.tabs.update(firstTab.id, { url: lockUrl });
-
-      // Close any other tabs
-      for (let i = 1; i < tabs.length; i++) {
-        try {
-          await chrome.tabs.remove(tabs[i].id);
-        } catch (_) {}
-      }
-    } else {
-      await chrome.tabs.create({ windowId, url: lockUrl, active: true });
-    }
-  } catch (err) {
-    console.error('[Browser-Locker] enforceLockOnWindow error:', err);
-  }
-}
-
-/**
- * Unlocks the vault and restores session.
- * @returns {Promise<string|null>}
+ * Unlocks the vault, restores minimized normal browser windows,
+ * and cleanly closes the fullscreen lock window.
  */
 async function unlockVault() {
   await setLockState(false);
@@ -191,95 +178,223 @@ async function unlockVault() {
     lastActiveTimestamp: Date.now()
   });
 
-  const session = await chrome.storage.session.get(['intendedUrl']);
-  const intendedUrl = session.intendedUrl;
-  await chrome.storage.session.remove(['intendedUrl']);
+  const activeLockWinId = lockWindowId;
+  lockWindowId = null;
+  await chrome.storage.local.remove(['lockWindowId']);
 
-  const lockUrl = chrome.runtime.getURL('lock.html');
-  const tabs = await chrome.tabs.query({});
-  const lockTabs = tabs.filter(t => t.url && t.url.startsWith(lockUrl));
+  try {
+    const windows = await chrome.windows.getAll();
+    const normalWindows = windows.filter(w => w.id !== activeLockWinId && !w.incognito);
 
-  if (lockTabs.length > 0) {
-    const primaryTab = lockTabs[0];
-    const targetUrl = (intendedUrl && !intendedUrl.startsWith(lockUrl)) ? intendedUrl : 'chrome://newtab/';
-    try {
-      await chrome.tabs.update(primaryTab.id, { url: targetUrl });
-    } catch (_) {
+    if (normalWindows.length > 0) {
+      // Un-minimize and focus the primary normal window
       try {
-        await chrome.tabs.update(primaryTab.id, { url: 'chrome://newtab/' });
+        await chrome.windows.update(normalWindows[0].id, { state: 'maximized', focused: true });
+      } catch (_) {
+        try {
+          await chrome.windows.update(normalWindows[0].id, { state: 'normal', focused: true });
+        } catch (_) {}
+      }
+    } else {
+      // If no normal window was open, spawn a fresh normal browser window
+      try {
+        await chrome.windows.create({
+          url: 'chrome://newtab/',
+          type: 'normal',
+          state: 'maximized',
+          focused: true
+        });
       } catch (_) {}
     }
 
-    // Close any duplicate lock tabs
-    for (let i = 1; i < lockTabs.length; i++) {
+    // Close the dedicated kiosk lock window
+    if (activeLockWinId) {
       try {
-        await chrome.tabs.remove(lockTabs[i].id);
+        await chrome.windows.remove(activeLockWinId);
       } catch (_) {}
     }
+  } catch (err) {
+    console.error('[Browser-Locker] unlockVault error:', err);
   }
 
-  return intendedUrl || null;
+  return true;
 }
 
 /* --------------------------------------------------------------------------
-   CRITICAL FIX 1: Window Close & Reopen Detection (Windows Background Fix)
+   Focus Trap & Window Lifecycle Enforcement
    -------------------------------------------------------------------------- */
 
 /**
- * Whenever a window is closed: check if total window count is now 0.
- * If 0, record timestamp and lock immediately if gracePeriod is 0.
+ * Window Focus Trap:
+ * While locked, if user clicks/restores any normal Chrome window (e.g. from taskbar),
+ * immediately re-minimize that window and force focus back to the fullscreen lock window.
  */
-chrome.windows.onRemoved.addListener(async () => {
+chrome.windows.onFocusChanged.addListener(async (focusedWindowId) => {
+  if (focusedWindowId === chrome.windows.WINDOW_ID_NONE) return;
   const configured = await isVaultConfigured();
   if (!configured) return;
 
+  const locked = await getLockState();
+  if (!locked) return;
+
+  // Retrieve current lockWindowId if not cached in memory
+  if (!lockWindowId) {
+    const data = await chrome.storage.local.get(['lockWindowId']);
+    lockWindowId = data.lockWindowId || null;
+  }
+
+  if (lockWindowId && focusedWindowId !== lockWindowId) {
+    // Re-minimize the unauthorized normal window immediately
+    try {
+      await chrome.windows.update(focusedWindowId, { state: 'minimized' });
+    } catch (_) {}
+
+    // Pull focus back to the kiosk lock window
+    try {
+      await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+    } catch (_) {}
+  } else if (!lockWindowId) {
+    await enforceLock();
+  }
+});
+
+/**
+ * Window Created Interception:
+ * If a new window is created while locked, keep it minimized and lock window focused.
+ */
+chrome.windows.onCreated.addListener(async (win) => {
+  const configured = await isVaultConfigured();
+  if (!configured) return;
+
+  // Allow our own lock window creation
+  if (win.id === lockWindowId) return;
+
+  const locked = await getLockState();
+  if (locked) {
+    if (win.incognito) {
+      try { await chrome.windows.remove(win.id); } catch (_) {}
+      return;
+    }
+
+    // Minimize newly created normal window immediately
+    try {
+      await chrome.windows.update(win.id, { state: 'minimized' });
+    } catch (_) {}
+
+    if (lockWindowId) {
+      try {
+        await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+      } catch (_) {}
+    } else {
+      await enforceLock();
+    }
+    return;
+  }
+
+  // If unlocked: evaluate startup grace period on first window creation
   const allWindows = await chrome.windows.getAll();
-  if (allWindows.length === 0) {
+  const data = await chrome.storage.local.get(['settings', 'lastWindowClosedTimestamp']);
+  const gracePeriod = data.settings?.gracePeriod ?? 0;
+  const lastClosed = data.lastWindowClosedTimestamp || 0;
+  const now = Date.now();
+
+  if (allWindows.length <= 1) {
+    if (gracePeriod === 0 || (lastClosed > 0 && (now - lastClosed) >= gracePeriod * 60 * 1000)) {
+      await setLockState(true);
+      await enforceLock();
+    }
+  }
+});
+
+/**
+ * Window Removed Interception (Anti-Bypass Guard):
+ * 1. If the user closes the lock window while STILL locked (Alt+F4 / window X),
+ *    immediately terminate ALL other Chrome windows so the entire browser exits!
+ * 2. Track when total window count drops to 0 for startup auto-lock.
+ */
+chrome.windows.onRemoved.addListener(async (removedWindowId) => {
+  const configured = await isVaultConfigured();
+  if (!configured) return;
+
+  const locked = await getLockState();
+
+  // If lockWindowId was closed while still locked: TERMINATE ENTIRE BROWSER
+  if (locked && removedWindowId === lockWindowId) {
+    console.warn('[Browser-Locker] Lock window was closed while locked. Exiting all browser windows.');
+    lockWindowId = null;
+    await chrome.storage.local.remove(['lockWindowId']);
+
+    try {
+      const remaining = await chrome.windows.getAll();
+      for (const w of remaining) {
+        try { await chrome.windows.remove(w.id); } catch (_) {}
+      }
+    } catch (_) {}
+    return;
+  }
+
+  // Check if all normal windows are now closed
+  const allWindows = await chrome.windows.getAll();
+  if (allWindows.length === 0 || (allWindows.length === 1 && allWindows[0].id === lockWindowId)) {
     const data = await chrome.storage.local.get(['settings']);
     const gracePeriod = data.settings?.gracePeriod ?? 0;
     await chrome.storage.local.set({ lastWindowClosedTimestamp: Date.now() });
 
     if (gracePeriod === 0) {
-      // Immediate lock on last window close!
       await setLockState(true);
     }
   }
 });
 
 /**
- * Whenever a new window is created:
- * If gracePeriod is 0 or expired, or if isLocked is already true, enforce lock immediately!
+ * Tab Activated Interception:
+ * If user switches tabs inside a normal window, minimize it and focus lock window.
  */
-chrome.windows.onCreated.addListener(async (win) => {
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const configured = await isVaultConfigured();
   if (!configured) return;
 
-  const allWindows = await chrome.windows.getAll();
-  const data = await chrome.storage.local.get(['settings', 'lastWindowClosedTimestamp', 'isLocked']);
-  const gracePeriod = data.settings?.gracePeriod ?? 0;
-  const lastClosed = data.lastWindowClosedTimestamp || 0;
-  const now = Date.now();
-
-  let shouldLock = Boolean(data.isLocked);
-
-  // If this is the first window opened after having closed windows:
-  if (allWindows.length <= 1) {
-    if (gracePeriod === 0) {
-      shouldLock = true;
-    } else if (lastClosed > 0 && (now - lastClosed) >= gracePeriod * 60 * 1000) {
-      shouldLock = true;
+  const locked = await getLockState();
+  if (locked) {
+    if (lockWindowId && activeInfo.windowId !== lockWindowId) {
+      try {
+        await chrome.windows.update(activeInfo.windowId, { state: 'minimized' });
+        await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+      } catch (_) {}
     }
-  }
-
-  if (shouldLock) {
-    await setLockState(true);
-    await enforceLockOnWindow(win.id);
+  } else {
+    await chrome.storage.local.set({ lastActiveTimestamp: Date.now() });
   }
 });
 
 /**
- * Startup Lifecycle Event
+ * Tab Updated Interception:
+ * Block tamper management URLs (chrome://extensions, etc.) while locked.
  */
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  const configured = await isVaultConfigured();
+  if (!configured) return;
+
+  const locked = await getLockState();
+  const urlToCheck = changeInfo.url || tab.url;
+  if (!urlToCheck) return;
+
+  if (locked) {
+    if (isTamperUrl(urlToCheck)) {
+      try { await chrome.tabs.remove(tabId); } catch (_) {}
+      if (lockWindowId) {
+        try { await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true }); } catch (_) {}
+      }
+    }
+  } else {
+    await chrome.storage.local.set({ lastActiveTimestamp: Date.now() });
+  }
+});
+
+/* --------------------------------------------------------------------------
+   Startup, Idle, Commands, Alarms & Messages
+   -------------------------------------------------------------------------- */
+
 chrome.runtime.onStartup.addListener(async () => {
   const configured = await isVaultConfigured();
   if (!configured) {
@@ -287,7 +402,7 @@ chrome.runtime.onStartup.addListener(async () => {
     return;
   }
 
-  const data = await chrome.storage.local.get(['settings', 'lastActiveTimestamp', 'lastWindowClosedTimestamp']);
+  const data = await chrome.storage.local.get(['settings', 'lastActiveTimestamp']);
   const gracePeriod = data.settings?.gracePeriod ?? 0;
   const lastActive = data.lastActiveTimestamp || 0;
   const elapsed = Date.now() - lastActive;
@@ -295,22 +410,17 @@ chrome.runtime.onStartup.addListener(async () => {
   if (gracePeriod > 0 && lastActive > 0 && elapsed < gracePeriod * 60 * 1000) {
     await setLockState(false);
   } else {
-    // Default gracePeriod 0: always lock immediately on startup
     await setLockState(true);
     await enforceLock();
   }
 });
 
-/**
- * Extension Installed or Updated Event
- */
 chrome.runtime.onInstalled.addListener(async () => {
   const local = await chrome.storage.local.get(['settings', 'isConfigured']);
   if (!local.settings) {
     await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
   }
 
-  // Periodic heartbeat alarm to track last active timestamp
   chrome.alarms.create('heartbeat', { periodInMinutes: 0.5 });
 
   const configured = Boolean(local.isConfigured);
@@ -328,144 +438,6 @@ chrome.runtime.onInstalled.addListener(async () => {
   } catch (_) {}
 });
 
-/* --------------------------------------------------------------------------
-   CRITICAL FIX 2: Strict Tab Prison & New Tab Bypass Fix
-   -------------------------------------------------------------------------- */
-
-/**
- * Tab Created: Immediately intercept chrome://newtab, about:blank, or any tab
- */
-chrome.tabs.onCreated.addListener(async (tab) => {
-  const configured = await isVaultConfigured();
-  if (!configured) return;
-
-  const locked = await getLockState();
-  if (!locked) return;
-
-  const lockUrl = chrome.runtime.getURL('lock.html');
-
-  if (tab.url && tab.url.startsWith(lockUrl)) {
-    return;
-  }
-
-  // Check if a lock tab already exists in this window
-  if (tab.windowId) {
-    const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
-    const existingLockTab = windowTabs.find(t => t.url && t.url.startsWith(lockUrl));
-
-    if (existingLockTab && existingLockTab.id !== tab.id) {
-      // Close this newly spawned tab and refocus the lock tab
-      try {
-        await chrome.tabs.remove(tab.id);
-      } catch (_) {}
-      try {
-        await chrome.tabs.update(existingLockTab.id, { active: true });
-      } catch (_) {}
-      return;
-    }
-  }
-
-  // Otherwise, redirect this tab to lock.html
-  try {
-    await chrome.tabs.update(tab.id, { url: lockUrl });
-  } catch (_) {}
-});
-
-/**
- * Tab Updated: Intercept any URL changes while locked
- */
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  const configured = await isVaultConfigured();
-  if (!configured) return;
-
-  const locked = await getLockState();
-  const urlToCheck = changeInfo.url || tab.url;
-  if (!urlToCheck) return;
-
-  const lockUrl = chrome.runtime.getURL('lock.html');
-
-  if (locked) {
-    // 1. Anti-Tamper: Block chrome://extensions, chrome://settings, etc.
-    if (isTamperUrl(urlToCheck)) {
-      try {
-        await chrome.tabs.remove(tabId);
-      } catch (_) {}
-      await enforceLock();
-      return;
-    }
-
-    // 2. Tab Prison: Redirect any non-lock URL back to lock.html
-    if (!urlToCheck.startsWith(lockUrl)) {
-      if (urlToCheck.startsWith('http://') || urlToCheck.startsWith('https://')) {
-        const session = await chrome.storage.session.get(['intendedUrl']);
-        if (!session.intendedUrl) {
-          await chrome.storage.session.set({ intendedUrl: urlToCheck });
-        }
-      }
-      try {
-        await chrome.tabs.update(tabId, { url: lockUrl });
-      } catch (_) {}
-    }
-  } else {
-    // Unlocked safe navigation: update active timestamp
-    await chrome.storage.local.set({ lastActiveTimestamp: Date.now() });
-  }
-});
-
-/**
- * Tab Activated: Keep lock tab focused
- */
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  const configured = await isVaultConfigured();
-  if (!configured) return;
-
-  const locked = await getLockState();
-  if (!locked) {
-    await chrome.storage.local.set({ lastActiveTimestamp: Date.now() });
-    return;
-  }
-
-  const lockUrl = chrome.runtime.getURL('lock.html');
-  try {
-    const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (!tab.url || !tab.url.startsWith(lockUrl)) {
-      if (tab.url && isTamperUrl(tab.url)) {
-        await chrome.tabs.remove(tab.id);
-        await enforceLock();
-      } else {
-        await chrome.tabs.update(activeInfo.tabId, { url: lockUrl });
-      }
-    }
-  } catch (_) {}
-});
-
-/**
- * Window Focus Changed: Ensure lock screen is active tab
- */
-chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
-  const configured = await isVaultConfigured();
-  if (!configured) return;
-
-  const locked = await getLockState();
-  if (locked) {
-    const lockUrl = chrome.runtime.getURL('lock.html');
-    try {
-      const [activeTab] = await chrome.tabs.query({ windowId, active: true });
-      if (!activeTab || !activeTab.url || !activeTab.url.startsWith(lockUrl)) {
-        await enforceLockOnWindow(windowId);
-      }
-    } catch (_) {}
-  }
-});
-
-/* --------------------------------------------------------------------------
-   Idle, Alarms, Commands, and Messaging
-   -------------------------------------------------------------------------- */
-
-/**
- * Idle State Detection: auto-locks when workstation is idle or locked
- */
 chrome.idle.onStateChanged.addListener(async (newState) => {
   const configured = await isVaultConfigured();
   if (!configured) return;
@@ -483,9 +455,6 @@ chrome.idle.onStateChanged.addListener(async (newState) => {
   }
 });
 
-/**
- * Heartbeat Alarm: periodically updates lastActiveTimestamp while unlocked
- */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'heartbeat') {
     const locked = await getLockState();
@@ -495,9 +464,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-/**
- * Global Keyboard Shortcut: Alt+Shift+L
- */
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'lock-browser') {
     const configured = await isVaultConfigured();
@@ -508,7 +474,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 /**
- * Central Message Broker
+ * Message Broker
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
@@ -540,8 +506,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'UNLOCK': {
-        const restoredUrl = await unlockVault();
-        sendResponse({ success: true, restoredUrl });
+        await unlockVault();
+        sendResponse({ success: true });
+        break;
+      }
+
+      case 'VERIFY_FULLSCREEN': {
+        const isLocked = await getLockState();
+        if (isLocked && lockWindowId) {
+          try {
+            await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+          } catch (_) {}
+        }
+        sendResponse({ success: true });
         break;
       }
 
@@ -561,8 +538,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         const isValid = await verifyPassword(password, local.passwordHash, local.passwordSalt);
         if (isValid) {
-          const restoredUrl = await unlockVault();
-          sendResponse({ success: true, restoredUrl });
+          await unlockVault();
+          sendResponse({ success: true });
         } else {
           let attempts = (local.failedAttempts || 0) + 1;
           let lockoutUntil = 0;

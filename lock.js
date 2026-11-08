@@ -1,6 +1,10 @@
 /**
  * Browser-Locker - Native Lock Screen Controller
- * Handles immediate autofocus, brute-force lockout, and recovery key reset.
+ * Fullscreen Kiosk Mode:
+ * - Immediate autofocus so user can type password immediately.
+ * - Keyboard interception: blocks F11, Esc, Ctrl+W, Ctrl+T, Ctrl+N, Alt+F4.
+ * - Fullscreen loss monitoring & automatic re-enforcement.
+ * - Brute-force lockout and offline recovery key reset.
  */
 
 import {
@@ -77,7 +81,7 @@ function downloadText(filename, content) {
  * Ensures autofocus on password input immediately.
  */
 function forceAutofocus() {
-  if (masterPasswordInput && !masterPasswordInput.disabled && !setupContainer.classList.contains('hidden')) {
+  if (masterPasswordInput && !masterPasswordInput.disabled && setupContainer.classList.contains('hidden')) {
     masterPasswordInput.focus();
   }
 }
@@ -110,7 +114,7 @@ function checkLockoutState(lockoutUntil) {
         masterPasswordInput.disabled = false;
         unlockBtn.disabled = false;
         chrome.storage.local.set({ failedAttempts: 0, lockoutUntil: 0 });
-        masterPasswordInput.focus();
+        forceAutofocus();
       }
     };
 
@@ -154,15 +158,64 @@ async function initLockScreen() {
   forceAutofocus();
 }
 
+/* --------------------------------------------------------------------------
+   Keyboard Trap & Fullscreen Anti-Bypass Guard
+   -------------------------------------------------------------------------- */
+
+window.addEventListener('keydown', (e) => {
+  const blockedKeys = ['F11', 'F12'];
+  const isCtrl = e.ctrlKey || e.metaKey;
+
+  // Block fullscreen and devtools keys
+  if (blockedKeys.includes(e.key)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+
+  // Handle Escape: close recovery modal if open, otherwise block exit fullscreen
+  if (e.key === 'Escape') {
+    if (recoveryModal && !recoveryModal.classList.contains('hidden')) {
+      closeRecoveryModal();
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+
+  // Block Ctrl/Cmd navigation & tab shortcuts
+  if (isCtrl && ['w', 'W', 't', 'T', 'n', 'N', 'h', 'H', 'j', 'J', 'r', 'R', 'u', 'U'].includes(e.key)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+
+  // Block Alt+F4 if caught in browser DOM
+  if (e.altKey && e.key === 'F4') {
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+}, true);
+
+// Monitor window resize and fullscreen state to keep lock screen fullscreen
+window.addEventListener('resize', () => {
+  chrome.runtime.sendMessage({ action: 'VERIFY_FULLSCREEN' });
+});
+
+document.addEventListener('fullscreenchange', () => {
+  chrome.runtime.sendMessage({ action: 'VERIFY_FULLSCREEN' });
+});
+
 // Window focus & tab visibility listeners to ensure autofocus
 window.addEventListener('focus', forceAutofocus);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) forceAutofocus();
 });
 
-/**
- * Unlock Form Submission Handler
- */
+/* --------------------------------------------------------------------------
+   Unlock Form Submission Handler
+   -------------------------------------------------------------------------- */
 unlockForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const password = masterPasswordInput.value;
@@ -185,6 +238,7 @@ unlockForm.addEventListener('submit', async (e) => {
   if (isValid) {
     unlockError.classList.add('hidden');
     masterPasswordInput.value = '';
+    // Smooth unlock: un-minimizes normal windows and closes this kiosk popup
     chrome.runtime.sendMessage({ action: 'UNLOCK' });
   } else {
     // Subtle shake animation
@@ -285,10 +339,10 @@ openRecoveryLink.addEventListener('click', () => {
   recoveryKeyInput.focus();
 });
 
-const closeRecoveryModal = () => {
+function closeRecoveryModal() {
   recoveryModal.classList.add('hidden');
-  masterPasswordInput.focus();
-};
+  forceAutofocus();
+}
 
 closeModalBtn.addEventListener('click', closeRecoveryModal);
 cancelRecoveryBtn.addEventListener('click', closeRecoveryModal);

@@ -1,17 +1,18 @@
 # 🛡️ Browser-Locker
 
 > **Native OS-grade browser lock for Chromium browsers (Manifest V3).**  
-> Built with native Web Crypto API (SHA-256 with cryptographically random salts), zero-knowledge offline recovery, bulletproof window-close detection, and a clean, flat Zinc/Slate design system.
+> Built with native Web Crypto API (SHA-256 with cryptographically random salts), zero-knowledge offline recovery, bulletproof window-close detection, a clean flat Zinc/Slate design system, and an external toolbar-free fullscreen kiosk window architecture.
 
 ---
 
 ## ⚡ Key Capabilities
 
 * 🔐 **Zero Plain-Text Credentials:** Master passwords and recovery keys are never stored in plain text. All secrets are salted with a 128-bit random salt and digested with `SHA-256` via the standard `crypto.subtle` Web Crypto API.
-* 🛑 **Window-Close Auto-Lock (Windows Background Fix):** Solves the common Windows Chromium issue where closing all browser windows leaves background processes alive without triggering `onStartup`. Browser-Locker listens to `chrome.windows.onRemoved` and locks immediately once the total window count drops to zero.
+* 🖥️ **Toolbar-Free Fullscreen Kiosk Architecture:** Normal browser windows are minimized upon locking so the address bar, bookmarks bar, and extension toolbar ("Remove from Chrome" right-click menu) are completely inaccessible. The lock screen runs in a dedicated `type: "popup"`, `state: "fullscreen"` window with zero browser chrome.
+* 🪤 **Inescapable Focus Trap & Anti-Bypass Guard:** If the user attempts to restore or click a minimized normal window, it is immediately re-minimized and focus returns to the fullscreen lock window. If the user closes the lock window (e.g. via Alt+F4 or window X) while locked, all remaining Chrome windows are immediately terminated, causing the browser to safely exit.
+* 🛑 **Window-Close Auto-Lock (Windows Background Fix):** Solves the Windows Chromium issue where closing all browser windows leaves background processes alive without triggering `onStartup`. Browser-Locker listens to `chrome.windows.onRemoved` and locks immediately once the total window count drops to zero.
 * ⏱️ **Default 0-Minute Grace Period:** Configured by default to `0` minutes so that closing and reopening the browser ALWAYS demands the master password immediately.
-* 🛑 **Strict Single-Tab Prison & New Tab Bypass Fix:** Intercepts `chrome://newtab/`, `about:blank`, `chrome://extensions/`, and `chrome://settings/`. If the browser is locked, only `lock.html` is permitted; all other tabs are closed or redirected.
-* 🛡️ **Anti-Tamper Shielding:** Attempts to open browser management pages (`chrome://extensions`, `chrome://settings`, etc.) are terminated immediately (`chrome.tabs.remove`). Incognito windows created while locked are instantly closed.
+* ⌨️ **Keyboard Interception:** Blocks `F11`, `Escape`, `Ctrl+W`, `Ctrl+T`, `Ctrl+N`, `Ctrl+Shift+N`, `Alt+F4`, and devtools shortcuts while locked. Automatically re-enforces fullscreen if the display changes.
 * 🔒 **Secure Popup Authentication:** Opening the extension popup while locked displays **only** a compact password entry prompt. Settings, toggles, or controls are never exposed without prior authentication.
 * ⚡ **Immediate Autofocus:** Password inputs in `lock.html` and `popup.html` have autofocus enabled so users can type their password immediately upon launch without clicking.
 * 🎨 **Native OS Design System:** Clean, flat Zinc 900/800 design (`#18181b` backdrop, `#27272a` cards, `#3f3f46` borders, `#2563eb` buttons, and `-apple-system` native system typography). Zero neon glows, purple gradients, or artificial animations.
@@ -22,30 +23,17 @@
 
 ```mermaid
 flowchart TD
-    Event([Browser Event]) --> Router{Event Dispatcher}
+    Event([Lock Triggered: Startup / Idle / Close / Manual]) --> EnforceLock[enforceLock Handler]
 
-    Router -->|Window Closed| WinRemoved[chrome.windows.onRemoved]
-    Router -->|Window Created| WinCreated[chrome.windows.onCreated]
-    Router -->|Tab Created / Updated| TabEvent[chrome.tabs.onCreated / onUpdated]
-    Router -->|System Inactive| Idle[chrome.idle.onStateChanged]
-    Router -->|Shortcut Alt+Shift+L| Shortcut[chrome.commands.onCommand]
+    EnforceLock --> MinimizeNormal[Minimize All Normal Windows]
+    MinimizeNormal --> CreateKioskWin[Create type: popup, state: fullscreen Lock Window]
 
-    WinRemoved --> CheckCount{Any open windows left?}
-    CheckCount -->|No: Count = 0| GraceCheck{Grace Period > 0?}
-    GraceCheck -->|No: Default 0| SetLockTrue[Lock in storage.local immediately]
-    GraceCheck -->|Yes| RecordClosedTime[Record lastWindowClosedTimestamp]
+    CreateKioskWin --> FocusTrap{User Actions While Locked}
 
-    WinCreated --> CheckLockState{Is Locked or Grace Expired?}
-    CheckLockState -->|Yes| EnforceLockOnWin[Redirect tab to lock.html & Close other tabs]
-    CheckLockState -->|No| AllowWin[Allow normal browsing]
-
-    TabEvent --> TabLockCheck{Is Vault Locked?}
-    TabLockCheck -->|Yes: chrome://extensions or settings| RemoveTab[chrome.tabs.remove & Focus lock.html]
-    TabLockCheck -->|Yes: chrome://newtab or other URL| RedirectToLock[chrome.tabs.update to lock.html]
-    TabLockCheck -->|No| UpdateActive[Update lastActiveTimestamp]
-
-    Idle --> SetLockTrue
-    Shortcut --> SetLockTrue
+    FocusTrap -->|User clicks taskbar / normal window| TrapFocus[Re-minimize normal win & Re-focus lock win]
+    FocusTrap -->|User hits F11 / Esc / Ctrl+W / Ctrl+T| BlockKey[Intercept and preventDefault]
+    FocusTrap -->|User terminates lock win via Alt+F4| KillBrowser[Close ALL Chrome windows immediately]
+    FocusTrap -->|User inputs correct master password| UnlockVault[Restore normal window & Close kiosk lock win]
 ```
 
 ---
@@ -56,9 +44,9 @@ flowchart TD
 Browser-Locker/
 ├── manifest.json              # Chrome Manifest V3 configuration & permissions
 ├── crypto.js                  # Native Web Crypto API SHA-256 salted hashing & key gen
-├── background.js              # Service Worker managing window tracking & single-tab prison
-├── lock.html                  # Full-page native 360px lock dialog
-├── lock.js                    # Lock controller with autofocus & lockout defense
+├── background.js              # Service Worker: Kiosk popup management & focus trap
+├── lock.html                  # Toolbar-free fullscreen native 360px lock dialog
+├── lock.js                    # Lock controller with keyboard trap, autofocus & lockout
 ├── popup.html                 # 340px native popup (locked auth view & unlocked settings)
 ├── popup.js                   # Popup view switcher & credential manager
 ├── styles.css                 # Neutral Zinc/Slate native OS design system
