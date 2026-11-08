@@ -1,9 +1,9 @@
 /**
  * Browser-Locker - Native Lock Screen Controller
- * Fullscreen Kiosk Mode:
- * - Immediate autofocus so user can type password immediately.
- * - Keyboard interception: blocks F11, Esc, Ctrl+W, Ctrl+T, Ctrl+N, Alt+F4.
- * - Fullscreen loss monitoring & automatic re-enforcement.
+ * Standalone Desktop Dialog Mode:
+ * - Automatically centers the 780x560 window upon initial launch.
+ * - Freely allows the user to resize, shrink, or maximize the window.
+ * - Immediate autofocus on the password input.
  * - Brute-force lockout and offline recovery key reset.
  */
 
@@ -24,6 +24,7 @@ const dialogDesc = document.getElementById('dialog-desc');
 const unlockForm = document.getElementById('unlock-form');
 const masterPasswordInput = document.getElementById('master-password');
 const unlockBtn = document.getElementById('unlock-btn');
+const togglePassword = document.getElementById('togglePassword');
 const unlockError = document.getElementById('unlock-error');
 const cooldownBanner = document.getElementById('cooldown-banner');
 const cooldownSec = document.getElementById('cooldown-sec');
@@ -78,6 +79,24 @@ function downloadText(filename, content) {
 }
 
 /**
+ * Centers the popup window cleanly on the user's available display on initial load.
+ */
+async function centerLockWindow() {
+  try {
+    const currentWin = await chrome.windows.getCurrent();
+    if (currentWin && currentWin.type === 'popup') {
+      const screenW = window.screen.availWidth || window.screen.width || 1920;
+      const screenH = window.screen.availHeight || window.screen.height || 1080;
+      const targetW = Math.min(780, screenW - 40);
+      const targetH = Math.min(560, screenH - 40);
+      const left = Math.max(0, Math.round((screenW - targetW) / 2));
+      const top = Math.max(0, Math.round((screenH - targetH) / 2));
+      await chrome.windows.update(currentWin.id, { left, top, width: targetW, height: targetH });
+    }
+  } catch (_) {}
+}
+
+/**
  * Ensures autofocus on password input immediately.
  */
 function forceAutofocus() {
@@ -128,9 +147,12 @@ function checkLockoutState(lockoutUntil) {
 }
 
 /**
- * Initializes lock screen state
+ * Initializes lock screen state and centers window
  */
 async function initLockScreen() {
+  // Center window on initial launch
+  await centerLockWindow();
+
   const data = await chrome.storage.local.get([
     'isConfigured',
     'passwordHash',
@@ -159,53 +181,49 @@ async function initLockScreen() {
 }
 
 /* --------------------------------------------------------------------------
-   Keyboard Trap & Fullscreen Anti-Bypass Guard
+   Keyboard Guard (Prevents accidental tab closures while permitting free typing)
    -------------------------------------------------------------------------- */
 
 window.addEventListener('keydown', (e) => {
-  const blockedKeys = ['F11', 'F12'];
   const isCtrl = e.ctrlKey || e.metaKey;
 
-  // Block fullscreen and devtools keys
-  if (blockedKeys.includes(e.key)) {
-    e.preventDefault();
-    e.stopPropagation();
-    return false;
-  }
-
-  // Handle Escape: close recovery modal if open, otherwise block exit fullscreen
+  // Handle Escape: close recovery modal if open
   if (e.key === 'Escape') {
     if (recoveryModal && !recoveryModal.classList.contains('hidden')) {
       closeRecoveryModal();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
     }
-    e.preventDefault();
-    e.stopPropagation();
-    return false;
   }
 
-  // Block Ctrl/Cmd navigation & tab shortcuts
-  if (isCtrl && ['w', 'W', 't', 'T', 'n', 'N', 'h', 'H', 'j', 'J', 'r', 'R', 'u', 'U'].includes(e.key)) {
-    e.preventDefault();
-    e.stopPropagation();
-    return false;
-  }
-
-  // Block Alt+F4 if caught in browser DOM
-  if (e.altKey && e.key === 'F4') {
+  // Block shortcut keys that attempt to spawn tabs or close windows
+  if (isCtrl && ['w', 'W', 't', 'T', 'n', 'N', 'h', 'H', 'j', 'J'].includes(e.key)) {
     e.preventDefault();
     e.stopPropagation();
     return false;
   }
 }, true);
 
-// Monitor window resize and fullscreen state to keep lock screen fullscreen
-window.addEventListener('resize', () => {
-  chrome.runtime.sendMessage({ action: 'VERIFY_FULLSCREEN' });
-});
+// Eye icon SVGs for password preview toggle
+const EYE_ICON_SVG = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+  <circle cx="12" cy="12" r="3"></circle>
+</svg>`;
 
-document.addEventListener('fullscreenchange', () => {
-  chrome.runtime.sendMessage({ action: 'VERIFY_FULLSCREEN' });
-});
+const EYE_SLASH_ICON_SVG = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+  <line x1="1" y1="1" x2="23" y2="23"></line>
+</svg>`;
+
+if (togglePassword) {
+  togglePassword.addEventListener('click', () => {
+    const isPassword = masterPasswordInput.type === 'password';
+    masterPasswordInput.type = isPassword ? 'text' : 'password';
+    togglePassword.innerHTML = isPassword ? EYE_SLASH_ICON_SVG : EYE_ICON_SVG;
+    forceAutofocus();
+  });
+}
 
 // Window focus & tab visibility listeners to ensure autofocus
 window.addEventListener('focus', forceAutofocus);
@@ -236,10 +254,12 @@ unlockForm.addEventListener('submit', async (e) => {
   const isValid = await verifyPassword(password, local.passwordHash, local.passwordSalt);
 
   if (isValid) {
+    unlockBtn.disabled = true;
+    masterPasswordInput.disabled = true;
     unlockError.classList.add('hidden');
     masterPasswordInput.value = '';
-    // Smooth unlock: un-minimizes normal windows and closes this kiosk popup
-    chrome.runtime.sendMessage({ action: 'UNLOCK' });
+    // Un-minimizes normal windows and closes this desktop dialog popup
+    chrome.runtime.sendMessage({ action: 'unlock_success' });
   } else {
     // Subtle shake animation
     lockDialog.classList.remove('shake');
@@ -321,7 +341,7 @@ setupFinishBtn.addEventListener('click', async () => {
   });
 
   chrome.runtime.sendMessage({ action: 'SETUP_COMPLETED' }, () => {
-    chrome.runtime.sendMessage({ action: 'UNLOCK' });
+    chrome.runtime.sendMessage({ action: 'unlock_success' });
   });
 });
 
@@ -414,7 +434,7 @@ dlNewRecBtn.addEventListener('click', () => {
 
 finishNewRecBtn.addEventListener('click', () => {
   closeRecoveryModal();
-  chrome.runtime.sendMessage({ action: 'UNLOCK' });
+  chrome.runtime.sendMessage({ action: 'unlock_success' });
 });
 
 // Run initialization

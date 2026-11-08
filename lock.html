@@ -33,15 +33,23 @@
       <!-- Main Unlock Form -->
       <form id="unlock-form" autocomplete="off">
         <div class="form-group">
-          <input 
-            type="password" 
-            id="master-password" 
-            class="native-input" 
-            placeholder="Password" 
-            required 
-            autofocus
-            aria-label="Master Password"
-          >
+          <div class="password-container" style="position: relative; width: 100%;">
+            <input 
+              type="password" 
+              id="master-password" 
+              class="native-input" 
+              placeholder="Password" 
+              required 
+              autofocus
+              aria-label="Master Password"
+            >
+            <button id="togglePassword" type="button" aria-label="Toggle password visibility">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
           <div id="unlock-error" class="field-error hidden" role="alert">Incorrect password.</div>
         </div>
 

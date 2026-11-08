@@ -1,6 +1,7 @@
 /* ==========================================================================
    Browser-Locker - Native OS-Grade Design System
    Neutral Zinc/Slate palette inspired by native system dialogs & Chrome UI.
+   Fully responsive across any desktop window size (320x360 to 4K).
    ========================================================================== */
 
 :root {
@@ -42,6 +43,14 @@
   padding: 0;
 }
 
+html {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+
 body {
   font-family: var(--font-system);
   background-color: var(--bg-app);
@@ -51,29 +60,46 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
+  box-sizing: border-box;
 }
 
-/* --------------------------------------------------------------------------
-   Lock Screen Layout (Full-Page Native Viewport)
-   -------------------------------------------------------------------------- */
-.lock-viewport {
-  min-height: 100vh;
-  width: 100vw;
-  background-color: var(--bg-app);
+/* Lock screen body layout: Centered, flexible, scrollable on overflow */
+body:not(.popup-viewport) {
+  margin: 0;
+  padding: 16px;
+  width: 100%;
+  height: 100dvh;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  overflow: auto;
+}
+
+/* --------------------------------------------------------------------------
+   Lock Screen Layout (Fully Responsive Viewport & Dialog Card)
+   -------------------------------------------------------------------------- */
+.lock-viewport {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: auto;
+  box-sizing: border-box;
 }
 
 .lock-dialog {
   width: 100%;
   max-width: 360px;
+  min-width: 260px;
+  padding: clamp(16px, 4vw, 28px);
+  box-sizing: border-box;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 24px;
   box-shadow: var(--shadow-dialog);
+  margin: auto;
 }
 
 .lock-dialog-header {
@@ -147,6 +173,37 @@ body {
   font-family: var(--font-mono);
   letter-spacing: 0.05em;
   font-size: 12px;
+}
+
+/* Password Container & Visibility Toggle */
+.password-container {
+  position: relative;
+  width: 100%;
+}
+
+.password-container .native-input {
+  padding-right: 40px;
+}
+
+#togglePassword {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  transition: color 100ms ease;
+}
+
+#togglePassword:hover {
+  color: var(--text-primary);
 }
 
 /* --------------------------------------------------------------------------
@@ -420,10 +477,14 @@ body {
 .modal-card {
   width: 100%;
   max-width: 360px;
+  min-width: 260px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-sizing: border-box;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: clamp(16px, 4vw, 24px);
   box-shadow: var(--shadow-dialog);
 }
 
@@ -453,6 +514,78 @@ body {
 .close-btn:hover {
   color: var(--text-primary);
   background-color: var(--bg-surface-hover);
+}
+
+/* --------------------------------------------------------------------------
+   Responsive Media Queries for Small Windows & Tiny Viewports
+   -------------------------------------------------------------------------- */
+@media (max-width: 400px) {
+  body:not(.popup-viewport) {
+    padding: 8px;
+  }
+  .lock-dialog {
+    min-width: 240px;
+    padding: 14px;
+    border-radius: var(--radius-md);
+  }
+  .lock-dialog-title {
+    font-size: 15px;
+  }
+  .lock-dialog-desc {
+    font-size: 12px;
+  }
+}
+
+@media (max-height: 440px) {
+  body:not(.popup-viewport) {
+    padding: 8px;
+  }
+  .lock-dialog {
+    padding: 12px 16px;
+  }
+  .lock-dialog-header {
+    margin-bottom: 10px;
+  }
+  .lock-icon-wrap {
+    width: 28px;
+    height: 28px;
+    margin: 0 auto 6px;
+  }
+  .lock-icon-wrap svg {
+    width: 16px;
+    height: 16px;
+  }
+  .lock-dialog-title {
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  .lock-dialog-desc {
+    font-size: 11px;
+  }
+  .form-group {
+    margin-bottom: 8px;
+  }
+  .native-input {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .btn {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+  .alert-box {
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    font-size: 11px;
+  }
+  .recovery-box {
+    padding: 8px;
+    margin: 8px 0;
+  }
+  .recovery-code {
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
 }
 
 /* Utilities */

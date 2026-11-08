@@ -1,10 +1,11 @@
 /**
  * Browser-Locker - Background Service Worker (Manifest V3)
- * Fullscreen Toolbar-Free Kiosk Architecture:
- * - Hides/minimizes normal windows to eliminate the extensions toolbar & "Remove from Chrome" option.
- * - Spawns a dedicated toolbar-free fullscreen popup window for lock.html.
- * - Inescapable focus trap & anti-bypass guard (closing lock window terminates the browser).
- * - Smooth restoration of normal windows upon valid password verification.
+ * Standalone Desktop Popup Architecture:
+ * - Hides/minimizes normal browser windows to hide tabs, bookmarks, and extension toolbars.
+ * - Spawns a dedicated, toolbar-free 780x560 popup window for lock.html.
+ * - Allows full, free window resizing, shrinking, or maximizing by the user.
+ * - Inescapable focus trap: non-lock windows remain minimized; closing lock window terminates the browser.
+ * - Smooth restoration of normal windows upon valid password authentication.
  */
 
 import { verifyPassword } from './crypto.js';
@@ -34,12 +35,14 @@ const TAMPER_PREFIXES = [
   'about:addons'
 ];
 
-// In-memory reference to the active fullscreen lock window
+// In-memory state tracking to eliminate async race conditions
+let isLocked = false;
 let lockWindowId = null;
 
-// Rehydrate lockWindowId from storage upon Service Worker wake-up
-chrome.storage.local.get(['lockWindowId', 'isLocked']).then((data) => {
-  if (data.isLocked && data.lockWindowId) {
+// Rehydrate lockWindowId and isLocked from storage upon Service Worker wake-up
+chrome.storage.local.get(['lockWindowId', 'isLocked', 'locked']).then((data) => {
+  isLocked = Boolean(data.isLocked || data.locked);
+  if (isLocked && data.lockWindowId) {
     lockWindowId = data.lockWindowId;
   }
 });
@@ -54,27 +57,27 @@ async function isVaultConfigured() {
 }
 
 /**
- * Retrieves current lock state from storage.local.
- * @returns {Promise<boolean>}
+ * Retrieves current lock state synchronously from in-memory cache.
+ * @returns {boolean}
  */
-async function getLockState() {
-  const data = await chrome.storage.local.get(['isLocked']);
-  return Boolean(data.isLocked);
+function getLockState() {
+  return isLocked;
 }
 
 /**
- * Updates lock state in storage and refreshes badge.
+ * Updates lock state in memory, storage, and action badge.
  * @param {boolean} locked 
  */
 async function setLockState(locked) {
-  await chrome.storage.local.set({ isLocked: locked });
+  isLocked = Boolean(locked);
+  await chrome.storage.local.set({ isLocked: isLocked, locked: isLocked });
   const configured = await isVaultConfigured();
 
   if (!configured) {
     await chrome.action.setBadgeText({ text: 'NEW' });
     await chrome.action.setBadgeBackgroundColor({ color: '#d97706' }); // Amber
     await chrome.action.setTitle({ title: 'Browser-Locker: Initial Setup' });
-  } else if (locked) {
+  } else if (isLocked) {
     await chrome.action.setBadgeText({ text: 'LOCK' });
     await chrome.action.setBadgeBackgroundColor({ color: '#dc2626' }); // Red
     await chrome.action.setTitle({ title: 'Browser-Locker: Browser is Locked' });
@@ -118,9 +121,9 @@ async function minimizeNormalWindows() {
 }
 
 /**
- * Enforces the Fullscreen Toolbar-Free Kiosk Lock:
+ * Enforces the Standalone Desktop Lock Dialog Window:
  * 1. Minimizes all normal browser windows.
- * 2. Focuses existing lock window or creates a dedicated type: 'popup', state: 'fullscreen' window.
+ * 2. Focuses existing lock window or creates a dedicated resizable popup window (width: 780, height: 560).
  */
 async function enforceLock() {
   const configured = await isVaultConfigured();
@@ -135,7 +138,11 @@ async function enforceLock() {
         const existing = await chrome.windows.get(lockWindowId);
         if (existing) {
           await minimizeNormalWindows();
-          await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+          if (existing.state === 'minimized') {
+            await chrome.windows.update(lockWindowId, { focused: true, state: 'normal' });
+          } else {
+            await chrome.windows.update(lockWindowId, { focused: true });
+          }
           return;
         }
       } catch (_) {
@@ -146,31 +153,34 @@ async function enforceLock() {
     // Minimize normal windows before presenting the lock window
     await minimizeNormalWindows();
 
-    // Create the toolbar-free, extension-free popup window in fullscreen state
+    // Default centered coordinate fallbacks for 1920x1080 display
+    const defaultLeft = Math.max(0, Math.round((1920 - 780) / 2));
+    const defaultTop = Math.max(0, Math.round((1080 - 560) / 2));
+
+    // Create the toolbar-free, extension-free resizable popup window
     const lockWin = await chrome.windows.create({
       url: lockUrl,
       type: 'popup',
-      state: 'fullscreen',
+      width: 780,
+      height: 560,
+      left: defaultLeft,
+      top: defaultTop,
       focused: true
     });
 
     lockWindowId = lockWin.id;
     await chrome.storage.local.set({ lockWindowId: lockWin.id });
-
-    // Explicitly re-enforce fullscreen state in case the platform creates it maximized
-    try {
-      await chrome.windows.update(lockWin.id, { state: 'fullscreen', focused: true });
-    } catch (_) {}
   } catch (err) {
     console.error('[Browser-Locker] enforceLock error:', err);
   }
 }
 
 /**
- * Unlocks the vault, restores minimized normal browser windows,
- * and cleanly closes the fullscreen lock window.
+ * Unlocks the vault, closes the lock popup window, and restores or creates the normal browser window.
+ * @param {number|null} senderWindowId - Window ID of sender if available
  */
-async function unlockVault() {
+async function unlockVault(senderWindowId = null) {
+  // 1. Set isLocked = false
   await setLockState(false);
   await chrome.storage.local.set({
     failedAttempts: 0,
@@ -178,56 +188,77 @@ async function unlockVault() {
     lastActiveTimestamp: Date.now()
   });
 
-  const activeLockWinId = lockWindowId;
+  // Determine the lock popup window ID
+  const local = await chrome.storage.local.get(['lockWindowId']);
+  const winToClose = senderWindowId || lockWindowId || local.lockWindowId;
+
+  // 2. CRITICAL: Explicitly close the lock window popup and reset lockWindowId = null;
   lockWindowId = null;
   await chrome.storage.local.remove(['lockWindowId']);
 
-  try {
-    const windows = await chrome.windows.getAll();
-    const normalWindows = windows.filter(w => w.id !== activeLockWinId && !w.incognito);
+  if (winToClose) {
+    try {
+      await chrome.windows.remove(winToClose);
+    } catch (_) {}
+  }
 
-    if (normalWindows.length > 0) {
-      // Un-minimize and focus the primary normal window
+  // Also query to make sure any lingering popup window with lock.html is closed
+  try {
+    const all = await chrome.windows.getAll({ populate: true });
+    for (const w of all) {
+      if (w.id === winToClose) continue;
+      const isLockPopup = w.type === 'popup' && w.tabs?.some(t => t.url && t.url.includes('lock.html'));
+      if (isLockPopup) {
+        try { await chrome.windows.remove(w.id); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  // 3. Fetch all normal windows using { windowTypes: ['normal'] }
+  let normalWindows = [];
+  try {
+    normalWindows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+  } catch (_) {
+    const all = await chrome.windows.getAll();
+    normalWindows = all.filter(w => !w.incognito && w.type === 'normal');
+  }
+
+  // Filter out any lock window ID just in case
+  normalWindows = normalWindows.filter(w => w.id !== winToClose);
+
+  // 4. If normal windows exist, loop through them and un-minimize / maximize them.
+  // If NO normal windows exist, create one: chrome.windows.create({ type: "normal", focused: true }).
+  if (normalWindows.length > 0) {
+    for (const win of normalWindows) {
       try {
-        await chrome.windows.update(normalWindows[0].id, { state: 'maximized', focused: true });
+        await chrome.windows.update(win.id, { state: 'maximized', focused: true });
       } catch (_) {
         try {
-          await chrome.windows.update(normalWindows[0].id, { state: 'normal', focused: true });
+          await chrome.windows.update(win.id, { state: 'normal', focused: true });
         } catch (_) {}
       }
-    } else {
-      // If no normal window was open, spawn a fresh normal browser window
-      try {
-        await chrome.windows.create({
-          url: 'chrome://newtab/',
-          type: 'normal',
-          state: 'maximized',
-          focused: true
-        });
-      } catch (_) {}
     }
-
-    // Close the dedicated kiosk lock window
-    if (activeLockWinId) {
-      try {
-        await chrome.windows.remove(activeLockWinId);
-      } catch (_) {}
-    }
-  } catch (err) {
-    console.error('[Browser-Locker] unlockVault error:', err);
+  } else {
+    try {
+      await chrome.windows.create({
+        type: 'normal',
+        focused: true
+      });
+    } catch (_) {}
   }
 
   return true;
 }
 
 /* --------------------------------------------------------------------------
-   Focus Trap & Window Lifecycle Enforcement
+   Focus Trap & Window Lifecycle Enforcement (Permits Free User Resizing)
    -------------------------------------------------------------------------- */
 
 /**
  * Window Focus Trap:
  * While locked, if user clicks/restores any normal Chrome window (e.g. from taskbar),
- * immediately re-minimize that window and force focus back to the fullscreen lock window.
+ * immediately re-minimize that window and force focus to the lock window without
+ * altering the lock window's user-chosen size or maximized state.
  */
 chrome.windows.onFocusChanged.addListener(async (focusedWindowId) => {
   if (focusedWindowId === chrome.windows.WINDOW_ID_NONE) return;
@@ -237,7 +268,6 @@ chrome.windows.onFocusChanged.addListener(async (focusedWindowId) => {
   const locked = await getLockState();
   if (!locked) return;
 
-  // Retrieve current lockWindowId if not cached in memory
   if (!lockWindowId) {
     const data = await chrome.storage.local.get(['lockWindowId']);
     lockWindowId = data.lockWindowId || null;
@@ -249,9 +279,14 @@ chrome.windows.onFocusChanged.addListener(async (focusedWindowId) => {
       await chrome.windows.update(focusedWindowId, { state: 'minimized' });
     } catch (_) {}
 
-    // Pull focus back to the kiosk lock window
+    // Focus lock window without overriding user's chosen dimensions or state
     try {
-      await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+      const lockWin = await chrome.windows.get(lockWindowId);
+      if (lockWin.state === 'minimized') {
+        await chrome.windows.update(lockWindowId, { focused: true, state: 'normal' });
+      } else {
+        await chrome.windows.update(lockWindowId, { focused: true });
+      }
     } catch (_) {}
   } else if (!lockWindowId) {
     await enforceLock();
@@ -260,7 +295,7 @@ chrome.windows.onFocusChanged.addListener(async (focusedWindowId) => {
 
 /**
  * Window Created Interception:
- * If a new window is created while locked, keep it minimized and lock window focused.
+ * If a new normal window is created while locked, keep it minimized and lock window focused.
  */
 chrome.windows.onCreated.addListener(async (win) => {
   const configured = await isVaultConfigured();
@@ -283,7 +318,12 @@ chrome.windows.onCreated.addListener(async (win) => {
 
     if (lockWindowId) {
       try {
-        await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+        const lockWin = await chrome.windows.get(lockWindowId);
+        if (lockWin.state === 'minimized') {
+          await chrome.windows.update(lockWindowId, { focused: true, state: 'normal' });
+        } else {
+          await chrome.windows.update(lockWindowId, { focused: true });
+        }
       } catch (_) {}
     } else {
       await enforceLock();
@@ -316,11 +356,10 @@ chrome.windows.onRemoved.addListener(async (removedWindowId) => {
   const configured = await isVaultConfigured();
   if (!configured) return;
 
-  const locked = await getLockState();
-
-  // If lockWindowId was closed while still locked: TERMINATE ENTIRE BROWSER
-  if (locked && removedWindowId === lockWindowId) {
+  // Only trigger the emergency browser shutdown IF windowId === lockWindowId AND isLocked === true
+  if (isLocked === true && lockWindowId !== null && removedWindowId === lockWindowId) {
     console.warn('[Browser-Locker] Lock window was closed while locked. Exiting all browser windows.');
+    isLocked = false;
     lockWindowId = null;
     await chrome.storage.local.remove(['lockWindowId']);
 
@@ -359,7 +398,12 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     if (lockWindowId && activeInfo.windowId !== lockWindowId) {
       try {
         await chrome.windows.update(activeInfo.windowId, { state: 'minimized' });
-        await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
+        const lockWin = await chrome.windows.get(lockWindowId);
+        if (lockWin.state === 'minimized') {
+          await chrome.windows.update(lockWindowId, { focused: true, state: 'normal' });
+        } else {
+          await chrome.windows.update(lockWindowId, { focused: true });
+        }
       } catch (_) {}
     }
   } else {
@@ -383,7 +427,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (isTamperUrl(urlToCheck)) {
       try { await chrome.tabs.remove(tabId); } catch (_) {}
       if (lockWindowId) {
-        try { await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true }); } catch (_) {}
+        try { await chrome.windows.update(lockWindowId, { focused: true }); } catch (_) {}
       }
     }
   } else {
@@ -505,19 +549,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
 
+      case 'unlock_success':
       case 'UNLOCK': {
-        await unlockVault();
-        sendResponse({ success: true });
-        break;
-      }
-
-      case 'VERIFY_FULLSCREEN': {
-        const isLocked = await getLockState();
-        if (isLocked && lockWindowId) {
-          try {
-            await chrome.windows.update(lockWindowId, { state: 'fullscreen', focused: true });
-          } catch (_) {}
-        }
+        const senderWinId = sender?.tab?.windowId || null;
+        await unlockVault(senderWinId);
         sendResponse({ success: true });
         break;
       }
@@ -538,7 +573,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         const isValid = await verifyPassword(password, local.passwordHash, local.passwordSalt);
         if (isValid) {
-          await unlockVault();
+          const senderWinId = sender?.tab?.windowId || null;
+          await unlockVault(senderWinId);
           sendResponse({ success: true });
         } else {
           let attempts = (local.failedAttempts || 0) + 1;
