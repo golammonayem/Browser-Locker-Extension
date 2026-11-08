@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Clean Neutral Zinc 900 Background Plate -->
+  <rect width="128" height="128" rx="28" fill="#18181b" />
+  <rect width="126" height="126" x="1" y="1" rx="27" fill="none" stroke="#3f3f46" stroke-width="2" />
+
+  <!-- Shield Base: Royal Blue #2563eb -->
+  <path d="M64 22 L100 36 C100 74 76 98 64 108 C52 98 28 74 28 36 Z" fill="#2563eb" />
+
+  <!-- Padlock Shackle: Crisp White -->
+  <path d="M52 56 V48 C52 41.37 57.37 36 64 36 C70.63 36 76 41.37 76 48 V56" fill="none" stroke="#f4f4f5" stroke-width="6" stroke-linecap="round" />
+
+  <!-- Padlock Body: Crisp White -->
+  <rect x="46" y="56" width="36" height="28" rx="5" fill="#f4f4f5" />
+  
+  <!-- Keyhole: Zinc 900 -->
+  <circle cx="64" cy="67" r="3" fill="#18181b" />
+  <polygon points="62.5,67 65.5,67 67,76 61,76" fill="#18181b" />
+</svg>

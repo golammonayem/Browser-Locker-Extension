@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Browser is Locked</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="lock-viewport">
+    
+    <!-- Main Lock Dialog (360px wide native dialog) -->
+    <main class="lock-dialog" id="lock-dialog" role="main" aria-labelledby="dialog-heading">
+      
+      <!-- Icon & Heading -->
+      <div class="lock-dialog-header">
+        <div class="lock-icon-wrap" aria-hidden="true">
+          <!-- 20px Clean Monochrome Padlock -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+        </div>
+        <h1 class="lock-dialog-title" id="dialog-heading">Browser is Locked</h1>
+        <p class="lock-dialog-desc" id="dialog-desc">Enter your master password to continue.</p>
+      </div>
+
+      <!-- Cooldown Box (After 5 failed attempts) -->
+      <div id="cooldown-banner" class="alert-box alert-danger hidden" role="alert">
+        <span>Security lockout active. Try again in <strong id="cooldown-sec">30</strong>s.</span>
+      </div>
+
+      <!-- Main Unlock Form -->
+      <form id="unlock-form" autocomplete="off">
+        <div class="form-group">
+          <input 
+            type="password" 
+            id="master-password" 
+            class="native-input" 
+            placeholder="Password" 
+            required 
+            autofocus
+            aria-label="Master Password"
+          >
+          <div id="unlock-error" class="field-error hidden" role="alert">Incorrect password.</div>
+        </div>
+
+        <button type="submit" id="unlock-btn" class="btn btn-primary btn-block">
+          Unlock
+        </button>
+
+        <div style="text-align: center; margin-top: 14px;">
+          <button type="button" id="open-recovery-link" class="btn-link">
+            Reset with recovery key
+          </button>
+        </div>
+      </form>
+
+      <!-- First-Time Setup Wizard (Shown only if unconfigured) -->
+      <div id="setup-container" class="hidden">
+        <form id="setup-form">
+          <div class="form-group">
+            <label class="form-label" for="setup-pwd">Set Master Password (min 8 chars)</label>
+            <input type="password" id="setup-pwd" class="native-input" placeholder="Create password" required minlength="8" autofocus>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="setup-pwd-confirm">Confirm Password</label>
+            <input type="password" id="setup-pwd-confirm" class="native-input" placeholder="Repeat password" required minlength="8">
+          </div>
+
+          <button type="submit" id="setup-next-btn" class="btn btn-primary btn-block">
+            Continue & Generate Key
+          </button>
+        </form>
+
+        <div id="setup-recovery-step" class="hidden">
+          <div class="alert-box alert-warning" style="margin-top: 10px;">
+            <span>Save this offline recovery key. It is required if you ever forget your password.</span>
+          </div>
+
+          <div class="recovery-box">
+            <div id="setup-key-display" class="recovery-code">XXXX-XXXX-XXXX-XXXX</div>
+            <div class="recovery-buttons">
+              <button type="button" id="setup-copy-btn" class="btn btn-secondary btn-sm">Copy</button>
+              <button type="button" id="setup-dl-btn" class="btn btn-secondary btn-sm">Download .txt</button>
+            </div>
+          </div>
+
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; cursor: pointer;">
+            <input type="checkbox" id="setup-ack-check">
+            <span>I have saved my recovery key</span>
+          </label>
+
+          <button type="button" id="setup-finish-btn" class="btn btn-primary btn-block" disabled>
+            Activate & Unlock Browser
+          </button>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Recovery Key Modal Dialog -->
+    <div id="recovery-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-heading">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 class="modal-title" id="modal-heading">Reset Password</h2>
+          <button type="button" id="close-modal-btn" class="close-btn" aria-label="Close dialog">&times;</button>
+        </div>
+
+        <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
+          Enter your 16-character offline recovery key to configure a new master password.
+        </p>
+
+        <form id="recovery-form" autocomplete="off">
+          <div class="form-group">
+            <label class="form-label" for="recovery-key-input">Recovery Key</label>
+            <input 
+              type="text" 
+              id="recovery-key-input" 
+              class="native-input font-mono" 
+              placeholder="XXXX-XXXX-XXXX-XXXX" 
+              maxlength="19" 
+              required
+              spellcheck="false"
+            >
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="recovery-new-pwd">New Password (min 8 chars)</label>
+            <input type="password" id="recovery-new-pwd" class="native-input" placeholder="New password" minlength="8" required>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="recovery-confirm-pwd">Confirm New Password</label>
+            <input type="password" id="recovery-confirm-pwd" class="native-input" placeholder="Repeat new password" minlength="8" required>
+          </div>
+
+          <div id="recovery-error" class="field-error hidden" style="margin-bottom: 10px;">Invalid recovery key.</div>
+
+          <div style="display: flex; gap: 8px; margin-top: 12px;">
+            <button type="button" id="cancel-recovery-btn" class="btn btn-secondary" style="flex: 1;">Cancel</button>
+            <button type="submit" id="submit-recovery-btn" class="btn btn-primary" style="flex: 1.5;">Reset & Unlock</button>
+          </div>
+        </form>
+
+        <!-- New Generated Recovery Key Step -->
+        <div id="recovery-post-step" class="hidden">
+          <div class="alert-box alert-success" style="margin-top: 10px;">
+            <span>Password reset! Save your new recovery key:</span>
+          </div>
+          <div class="recovery-box">
+            <div id="new-rec-key-display" class="recovery-code">XXXX-XXXX-XXXX-XXXX</div>
+            <div class="recovery-buttons">
+              <button type="button" id="copy-new-rec-btn" class="btn btn-secondary btn-sm">Copy</button>
+              <button type="button" id="dl-new-rec-btn" class="btn btn-secondary btn-sm">Download</button>
+            </div>
+          </div>
+          <button type="button" id="finish-new-rec-btn" class="btn btn-primary btn-block">
+            Done & Unlock Browser
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="lock.js"></script>
+</body>
+</html>
