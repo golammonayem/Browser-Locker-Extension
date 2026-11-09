@@ -6,194 +6,223 @@
   <title>Browser-Locker</title>
   <link rel="stylesheet" href="styles.css">
 </head>
-<body class="popup-viewport">
+<body class="popup-body">
 
-  <!-- Header -->
-  <header class="popup-header">
-    <div class="popup-title-area">
-      <!-- 16px Monochrome Lock Icon -->
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- ═══════════ HEADER ═══════════ -->
+  <div class="popup-header">
+    <div class="popup-brand">
+      <svg class="popup-brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
         <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
       </svg>
-      <span class="popup-title">Browser-Locker</span>
+      <span class="popup-brand-name">Browser-Locker</span>
     </div>
-    <div id="popup-status-badge" class="status-badge unlocked">
-      <span>Active</span>
+    <div id="statusPill" class="status-pill unlocked">
+      <span class="status-dot"></span>
+      <span id="statusText">Unlocked</span>
     </div>
-  </header>
+  </div>
 
-  <main class="popup-body">
+  <!-- ═══════════ 1. SETUP VIEW (First-Time Onboarding) ═══════════ -->
+  <div class="popup-content hidden" id="setupView">
+    <div class="popup-section">
+      <h2 style="font-size: 15px; font-weight: 600; color: #fafafa;">Initial Configuration</h2>
+      <p class="info-msg">Create a master password to activate browser locking.</p>
+    </div>
 
-    <!-- VIEW 1: LOCKED VIEW (Displayed ONLY when isLocked === true) -->
-    <!-- Never shows settings or bypass switches without password verification -->
-    <div id="view-locked" class="hidden">
-      <div style="text-align: center; margin-bottom: 16px;">
-        <div class="lock-icon-wrap" style="width: 36px; height: 36px; margin: 0 auto 10px;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+    <form id="setupForm" class="popup-section" autocomplete="off">
+      <div class="password-container">
+        <input
+          type="password"
+          id="setupPassword"
+          class="native-input"
+          placeholder="Master Password"
+          required
+          minlength="4"
+          autofocus
+          autocomplete="off"
+        >
+        <button type="button" class="toggle-pass-btn" id="toggleSetupPass" aria-label="Toggle password visibility">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
           </svg>
-        </div>
-        <div style="font-size: 14px; font-weight: 600;">Browser is Locked</div>
-        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">Enter master password to unlock.</div>
+        </button>
       </div>
 
-      <form id="popup-unlock-form" autocomplete="off">
-        <div class="form-group">
-          <input 
-            type="password" 
-            id="popup-unlock-pwd" 
-            class="native-input" 
-            placeholder="Master password" 
-            required 
-            autofocus
-            aria-label="Master Password"
-          >
-          <div id="popup-unlock-error" class="field-error hidden">Incorrect password.</div>
-        </div>
-
-        <button type="submit" id="popup-unlock-btn" class="btn btn-primary btn-block">
-          Unlock
+      <div class="password-container">
+        <input
+          type="password"
+          id="setupConfirm"
+          class="native-input"
+          placeholder="Confirm Master Password"
+          required
+          minlength="4"
+          autocomplete="off"
+        >
+        <button type="button" class="toggle-pass-btn" id="toggleSetupConfirm" aria-label="Toggle password visibility">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
         </button>
-      </form>
+      </div>
+
+      <div class="error-msg" id="setupErrorMsg"></div>
+      <button type="submit" class="btn-primary" id="setupSubmitBtn">Set Master Password</button>
+    </form>
+  </div>
+
+  <!-- ═══════════ 2. SETUP RECOVERY KEY DISPLAY ═══════════ -->
+  <div class="popup-content hidden" id="setupKeyView">
+    <div class="popup-section">
+      <h2 style="font-size: 15px; font-weight: 600; color: #fafafa;">Save Recovery Key</h2>
+      <p class="info-msg">This key is required to reset your password if forgotten.</p>
     </div>
 
-    <!-- VIEW 2: UNLOCKED SETTINGS PANEL (Displayed ONLY when verified unlocked) -->
-    <div id="view-unlocked" class="hidden">
-      
-      <!-- Primary Action: Lock Browser Now -->
-      <button type="button" id="btn-lock-now" class="btn btn-danger btn-block" style="margin-bottom: 14px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-        </svg>
-        <span>Lock Browser Now</span>
-      </button>
-
-      <!-- Settings Form -->
-      <form id="popup-settings-form">
-        
-        <div class="setting-row">
-          <div class="setting-info">
-            <div class="setting-title">Idle Auto-Lock</div>
-            <div class="setting-desc">Auto-lock after minutes of inactivity</div>
-          </div>
-          <input 
-            type="number" 
-            id="setting-idle-timeout" 
-            class="setting-input-sm" 
-            min="1" 
-            max="120" 
-            value="5"
-          >
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <div class="setting-title">Reopen Grace Period</div>
-            <div class="setting-desc">0 = Lock immediately when closed</div>
-          </div>
-          <input 
-            type="number" 
-            id="setting-grace-period" 
-            class="setting-input-sm" 
-            min="0" 
-            max="60" 
-            value="0"
-          >
-        </div>
-
-        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
-          <button type="submit" id="btn-save-settings" class="btn btn-secondary btn-sm">
-            Save Settings
-          </button>
-        </div>
-        <div id="settings-feedback" class="field-error hidden" style="color: #4ade80; text-align: right; margin-top: 4px;">Settings saved.</div>
-      </form>
-
-      <div class="section-divider"></div>
-
-      <!-- Change Master Password Form -->
-      <div>
-        <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px;">Change Password</div>
-        <form id="popup-change-pwd-form">
-          <div class="form-group">
-            <input type="password" id="change-current-pwd" class="native-input" placeholder="Current password" required>
-          </div>
-          <div class="form-group">
-            <input type="password" id="change-new-pwd" class="native-input" placeholder="New password (min 8 chars)" minlength="8" required>
-          </div>
-          <div class="form-group">
-            <input type="password" id="change-confirm-pwd" class="native-input" placeholder="Confirm new password" minlength="8" required>
-            <div id="change-pwd-error" class="field-error hidden"></div>
-          </div>
-          <button type="submit" id="btn-update-pwd" class="btn btn-secondary btn-block">
-            Update Password
-          </button>
-        </form>
-      </div>
-
-      <div class="section-divider"></div>
-
-      <!-- Danger Controls -->
-      <div style="text-align: center;">
-        <button type="button" id="btn-factory-reset" class="btn-link" style="color: #ef4444; font-size: 11px;">
-          Reset extension to factory defaults
-        </button>
-      </div>
+    <div class="recovery-display">
+      <div class="recovery-key-text" id="setupKeyText"></div>
     </div>
 
-    <!-- VIEW 3: INITIAL SETUP VIEW (Displayed ONLY if unconfigured) -->
-    <div id="view-setup" class="hidden">
-      <div style="margin-bottom: 14px;">
-        <div style="font-size: 14px; font-weight: 600;">Setup Master Password</div>
-        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">Set a password to secure your browser sessions.</div>
-      </div>
-
-      <form id="popup-setup-form">
-        <div class="form-group">
-          <label class="form-label" for="setup-master-pwd">Master Password (min 8 chars)</label>
-          <input type="password" id="setup-master-pwd" class="native-input" placeholder="Create password" minlength="8" required autofocus>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="setup-master-confirm">Confirm Password</label>
-          <input type="password" id="setup-master-confirm" class="native-input" placeholder="Repeat password" minlength="8" required>
-          <div id="setup-error" class="field-error hidden"></div>
-        </div>
-
-        <button type="submit" id="btn-setup-next" class="btn btn-primary btn-block">
-          Continue
-        </button>
-      </form>
-
-      <div id="popup-setup-recovery-step" class="hidden">
-        <div class="alert-box alert-warning" style="margin-top: 10px;">
-          <span>Save this offline recovery key in case you forget your password.</span>
-        </div>
-
-        <div class="recovery-box">
-          <div id="popup-setup-key" class="recovery-code" style="font-size: 13px;">XXXX-XXXX-XXXX-XXXX</div>
-          <div class="recovery-buttons">
-            <button type="button" id="popup-copy-key-btn" class="btn btn-secondary btn-sm">Copy</button>
-            <button type="button" id="popup-dl-key-btn" class="btn btn-secondary btn-sm">Download</button>
-          </div>
-        </div>
-
-        <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; cursor: pointer;">
-          <input type="checkbox" id="popup-setup-ack">
-          <span>I have saved my recovery key</span>
-        </label>
-
-        <button type="button" id="btn-popup-setup-finish" class="btn btn-primary btn-block" disabled>
-          Activate & Secure
-        </button>
-      </div>
+    <div class="recovery-actions">
+      <button type="button" class="btn-secondary" id="setupCopyKeyBtn">📋 Copy</button>
+      <button type="button" class="btn-secondary" id="setupDownloadKeyBtn">💾 Download</button>
     </div>
 
-  </main>
+    <button type="button" class="btn-primary" id="setupFinishBtn">I Have Saved It — Continue</button>
+  </div>
 
-  <script type="module" src="popup.js"></script>
+  <!-- ═══════════ 3. SETTINGS & DASHBOARD VIEW ═══════════ -->
+  <div class="popup-content hidden" id="mainDashboardView">
+    <!-- Quick Lock Action -->
+    <div class="popup-section">
+      <button type="button" class="btn-primary" id="lockNowBtn">🔒 Lock Browser Now</button>
+      <p class="info-msg">Shortcut: Alt + Shift + L</p>
+    </div>
+
+    <!-- Configuration Settings -->
+    <div class="popup-section">
+      <span class="popup-section-title">Security Preferences</span>
+
+      <div class="setting-row">
+        <label class="setting-label" for="idleMinutesInput">Idle Lock (mins)</label>
+        <input type="number" class="setting-input" id="idleMinutesInput" min="1" max="60" value="5">
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label" for="graceMinutesInput">Grace Time (mins)</label>
+        <input type="number" class="setting-input" id="graceMinutesInput" min="0" max="30" value="0">
+      </div>
+
+      <div class="form-group" style="margin-top: 4px;">
+        <label class="setting-label" for="lockMessageInput">Custom Lock Message</label>
+        <input type="text" class="native-input" id="lockMessageInput" placeholder="e.g. Workstation Locked" maxlength="150">
+      </div>
+
+      <button type="button" class="btn-secondary" id="saveSettingsBtn">Save Settings</button>
+    </div>
+
+    <!-- Credentials Management -->
+    <div class="popup-section">
+      <span class="popup-section-title">Credentials</span>
+      <div class="popup-btn-row">
+        <button type="button" class="btn-secondary" id="openChangePassBtn">Change Password</button>
+        <button type="button" class="btn-secondary" id="openRegenKeyBtn">New Recovery Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 4. CHANGE PASSWORD VIEW ═══════════ -->
+  <div class="popup-content hidden" id="changePasswordView">
+    <div class="popup-section">
+      <span class="popup-section-title">Change Master Password</span>
+
+      <form id="changePasswordForm" class="form-group" autocomplete="off">
+        <input
+          type="password"
+          class="native-input"
+          id="currentPasswordInput"
+          placeholder="Current Master Password"
+          required
+          autocomplete="off"
+        >
+        <input
+          type="password"
+          class="native-input"
+          id="newPasswordInput"
+          placeholder="New Master Password"
+          required
+          minlength="4"
+          autocomplete="off"
+        >
+        <input
+          type="password"
+          class="native-input"
+          id="confirmNewPasswordInput"
+          placeholder="Confirm New Password"
+          required
+          minlength="4"
+          autocomplete="off"
+        >
+
+        <div class="error-msg" id="changePasswordError"></div>
+
+        <div class="popup-btn-row">
+          <button type="button" class="btn-secondary" id="cancelChangePassBtn">Cancel</button>
+          <button type="submit" class="btn-primary" id="saveChangePassBtn">Update</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══════════ 5. REGENERATE RECOVERY KEY VIEW ═══════════ -->
+  <div class="popup-content hidden" id="regenKeyView">
+    <div class="popup-section">
+      <span class="popup-section-title">Regenerate Recovery Key</span>
+      <p class="info-msg">Enter your master password to generate a new key.</p>
+
+      <form id="regenKeyForm" class="form-group" autocomplete="off">
+        <input
+          type="password"
+          class="native-input"
+          id="regenPasswordInput"
+          placeholder="Master Password"
+          required
+          autocomplete="off"
+        >
+
+        <div class="error-msg" id="regenKeyError"></div>
+
+        <div class="popup-btn-row">
+          <button type="button" class="btn-secondary" id="cancelRegenKeyBtn">Cancel</button>
+          <button type="submit" class="btn-primary" id="confirmRegenKeyBtn">Generate</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══════════ 6. DISPLAY NEW RECOVERY KEY VIEW ═══════════ -->
+  <div class="popup-content hidden" id="displayNewKeyView">
+    <div class="popup-section">
+      <span class="popup-section-title">New Recovery Key</span>
+
+      <div class="recovery-display">
+        <div class="recovery-key-text" id="newKeyDisplay"></div>
+      </div>
+
+      <div class="recovery-actions">
+        <button type="button" class="btn-secondary" id="copyNewKeyBtn">📋 Copy</button>
+        <button type="button" class="btn-secondary" id="downloadNewKeyBtn">💾 Download</button>
+      </div>
+
+      <button type="button" class="btn-primary" id="finishNewKeyBtn">Done</button>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="toast"></div>
+
+  <script src="crypto.js"></script>
+  <script src="popup.js"></script>
 </body>
 </html>

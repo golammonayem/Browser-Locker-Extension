@@ -1,302 +1,416 @@
-/**
- * Browser-Locker - Extension Popup Controller
- * Enforces strict authentication before exposing settings.
- */
+/* ============================================================
+ * Browser-Locker — popup.js
+ * Controls the extension action popup:
+ * Initial onboarding, quick lock, idle & grace settings,
+ * password modification, and recovery key regeneration.
+ * ============================================================ */
 
-import {
-  generateSalt,
-  hashWithSalt,
-  verifyPassword,
-  generateRecoveryKey
-} from './crypto.js';
+(function () {
+  "use strict";
 
-// DOM Element References
-const popupStatusBadge = document.getElementById('popup-status-badge');
-const viewLocked = document.getElementById('view-locked');
-const viewUnlocked = document.getElementById('view-unlocked');
-const viewSetup = document.getElementById('view-setup');
+  // ── Views ──
+  const setupView = document.getElementById("setupView");
+  const setupKeyView = document.getElementById("setupKeyView");
+  const mainDashboardView = document.getElementById("mainDashboardView");
+  const changePasswordView = document.getElementById("changePasswordView");
+  const regenKeyView = document.getElementById("regenKeyView");
+  const displayNewKeyView = document.getElementById("displayNewKeyView");
 
-// Locked View Elements
-const popupUnlockForm = document.getElementById('popup-unlock-form');
-const popupUnlockPwd = document.getElementById('popup-unlock-pwd');
-const popupUnlockError = document.getElementById('popup-unlock-error');
+  const views = [
+    setupView,
+    setupKeyView,
+    mainDashboardView,
+    changePasswordView,
+    regenKeyView,
+    displayNewKeyView
+  ];
 
-// Unlocked View Elements
-const btnLockNow = document.getElementById('btn-lock-now');
-const popupSettingsForm = document.getElementById('popup-settings-form');
-const settingIdleTimeout = document.getElementById('setting-idle-timeout');
-const settingGracePeriod = document.getElementById('setting-grace-period');
-const settingsFeedback = document.getElementById('settings-feedback');
-const popupChangePwdForm = document.getElementById('popup-change-pwd-form');
-const changeCurrentPwd = document.getElementById('change-current-pwd');
-const changeNewPwd = document.getElementById('change-new-pwd');
-const changeConfirmPwd = document.getElementById('change-confirm-pwd');
-const changePwdError = document.getElementById('change-pwd-error');
-const btnFactoryReset = document.getElementById('btn-factory-reset');
+  // ── Header Status Elements ──
+  const statusPill = document.getElementById("statusPill");
+  const statusText = document.getElementById("statusText");
 
-// Setup View Elements
-const popupSetupForm = document.getElementById('popup-setup-form');
-const setupMasterPwd = document.getElementById('setup-master-pwd');
-const setupMasterConfirm = document.getElementById('setup-master-confirm');
-const setupError = document.getElementById('setup-error');
-const popupSetupRecoveryStep = document.getElementById('popup-setup-recovery-step');
-const popupSetupKey = document.getElementById('popup-setup-key');
-const popupCopyKeyBtn = document.getElementById('popup-copy-key-btn');
-const popupDlKeyBtn = document.getElementById('popup-dl-key-btn');
-const popupSetupAck = document.getElementById('popup-setup-ack');
-const btnPopupSetupFinish = document.getElementById('btn-popup-setup-finish');
+  // ── Setup View Elements ──
+  const setupForm = document.getElementById("setupForm");
+  const setupPassword = document.getElementById("setupPassword");
+  const setupConfirm = document.getElementById("setupConfirm");
+  const setupErrorMsg = document.getElementById("setupErrorMsg");
+  const setupSubmitBtn = document.getElementById("setupSubmitBtn");
+  const toggleSetupPass = document.getElementById("toggleSetupPass");
+  const toggleSetupConfirm = document.getElementById("toggleSetupConfirm");
 
-let currentGeneratedWizardKey = '';
+  // ── Setup Key View Elements ──
+  const setupKeyText = document.getElementById("setupKeyText");
+  const setupCopyKeyBtn = document.getElementById("setupCopyKeyBtn");
+  const setupDownloadKeyBtn = document.getElementById("setupDownloadKeyBtn");
+  const setupFinishBtn = document.getElementById("setupFinishBtn");
 
-/**
- * Downloads a plain text file.
- * @param {string} filename 
- * @param {string} content 
- */
-function downloadText(filename, content) {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
+  // ── Dashboard View Elements ──
+  const lockNowBtn = document.getElementById("lockNowBtn");
+  const idleMinutesInput = document.getElementById("idleMinutesInput");
+  const graceMinutesInput = document.getElementById("graceMinutesInput");
+  const lockMessageInput = document.getElementById("lockMessageInput");
+  const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+  const openChangePassBtn = document.getElementById("openChangePassBtn");
+  const openRegenKeyBtn = document.getElementById("openRegenKeyBtn");
 
-/**
- * Shows the specified view and hides all others.
- * @param {'locked'|'unlocked'|'setup'} viewName 
- */
-function switchView(viewName) {
-  viewLocked.classList.add('hidden');
-  viewUnlocked.classList.add('hidden');
-  viewSetup.classList.add('hidden');
+  // ── Change Password Elements ──
+  const changePasswordForm = document.getElementById("changePasswordForm");
+  const currentPasswordInput = document.getElementById("currentPasswordInput");
+  const newPasswordInput = document.getElementById("newPasswordInput");
+  const confirmNewPasswordInput = document.getElementById("confirmNewPasswordInput");
+  const changePasswordError = document.getElementById("changePasswordError");
+  const cancelChangePassBtn = document.getElementById("cancelChangePassBtn");
+  const saveChangePassBtn = document.getElementById("saveChangePassBtn");
 
-  if (viewName === 'locked') {
-    viewLocked.classList.remove('hidden');
-    popupStatusBadge.className = 'status-badge locked';
-    popupStatusBadge.innerHTML = '<span>Locked</span>';
-    setTimeout(() => popupUnlockPwd.focus(), 50);
-  } else if (viewName === 'unlocked') {
-    viewUnlocked.classList.remove('hidden');
-    popupStatusBadge.className = 'status-badge unlocked';
-    popupStatusBadge.innerHTML = '<span>Active</span>';
-  } else if (viewName === 'setup') {
-    viewSetup.classList.remove('hidden');
-    popupStatusBadge.className = 'status-badge';
-    popupStatusBadge.style.backgroundColor = 'rgba(217, 119, 6, 0.15)';
-    popupStatusBadge.style.color = '#fcd34d';
-    popupStatusBadge.style.border = '1px solid rgba(217, 119, 6, 0.3)';
-    popupStatusBadge.innerHTML = '<span>Setup</span>';
-    setTimeout(() => setupMasterPwd.focus(), 50);
+  // ── Regenerate Key Elements ──
+  const regenKeyForm = document.getElementById("regenKeyForm");
+  const regenPasswordInput = document.getElementById("regenPasswordInput");
+  const regenKeyError = document.getElementById("regenKeyError");
+  const cancelRegenKeyBtn = document.getElementById("cancelRegenKeyBtn");
+  const confirmRegenKeyBtn = document.getElementById("confirmRegenKeyBtn");
+
+  // ── Display New Key Elements ──
+  const newKeyDisplay = document.getElementById("newKeyDisplay");
+  const copyNewKeyBtn = document.getElementById("copyNewKeyBtn");
+  const downloadNewKeyBtn = document.getElementById("downloadNewKeyBtn");
+  const finishNewKeyBtn = document.getElementById("finishNewKeyBtn");
+
+  // ── Toast Element ──
+  const toast = document.getElementById("toast");
+
+  // ── Internal State ──
+  let generatedSetupKey = null;
+  let activeNewRecoveryKey = null;
+
+  // ── Eye Icon SVGs ──
+  const EYE_OPEN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+  const EYE_SLASHED = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><line x1="1" y1="1" x2="23" y2="23"></line><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path></svg>';
+
+  // ── Utility Functions ──
+  function showView(targetView) {
+    views.forEach(v => v.classList.add("hidden"));
+    targetView.classList.remove("hidden");
   }
-}
 
-/**
- * Initializes the popup UI based on current vault status.
- */
-function initPopup() {
-  chrome.runtime.sendMessage({ action: 'GET_STATUS' }, (res) => {
-    if (!res || !res.isConfigured) {
-      switchView('setup');
+  function setStatusBadge(isLocked) {
+    if (isLocked) {
+      statusPill.className = "status-pill locked";
+      statusText.textContent = "Locked";
+    } else {
+      statusPill.className = "status-pill unlocked";
+      statusText.textContent = "Unlocked";
+    }
+  }
+
+  function showToast(message) {
+    toast.textContent = message;
+    toast.classList.add("show");
+    setTimeout(() => {
+      toast.classList.remove("show");
+    }, 2400);
+  }
+
+  function bindToggle(button, input) {
+    if (!button || !input) return;
+    button.addEventListener("click", () => {
+      const isPass = input.type === "password";
+      input.type = isPass ? "text" : "password";
+      button.innerHTML = isPass ? EYE_SLASHED : EYE_OPEN;
+      input.focus();
+    });
+  }
+
+  function triggerDownload(key) {
+    const text = `Browser-Locker Recovery Key\n${"=".repeat(32)}\nRecovery Key: ${key}\n\nGenerated: ${new Date().toISOString()}\nStore this key offline to reset your master password.\n`;
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "browser-locker-recovery-key.txt";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  INITIALIZATION
+  // ══════════════════════════════════════════════════════════════
+  async function init() {
+    bindToggle(toggleSetupPass, setupPassword);
+    bindToggle(toggleSetupConfirm, setupConfirm);
+
+    try {
+      const status = await chrome.runtime.sendMessage({ action: "GET_STATUS" });
+
+      if (!status || !status.hasPassword) {
+        // First-Time Setup Screen
+        setStatusBadge(false);
+        showView(setupView);
+        setupPassword.focus();
+        return;
+      }
+
+      // Existing user: configure dashboard
+      setStatusBadge(status.isLocked);
+      idleMinutesInput.value = status.idleMinutes ?? 5;
+      graceMinutesInput.value = status.graceMinutes ?? 0;
+      lockMessageInput.value = status.lockMessage || "";
+
+      showView(mainDashboardView);
+    } catch (err) {
+      console.error("[popup.js] init error:", err);
+      showView(setupView);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  FIRST-TIME SETUP SUBMISSION
+  // ══════════════════════════════════════════════════════════════
+  setupForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setupErrorMsg.textContent = "";
+
+    const pass = setupPassword.value;
+    const confirm = setupConfirm.value;
+
+    if (pass.length < 4) {
+      setupErrorMsg.textContent = "Password must be at least 4 characters.";
+      return;
+    }
+    if (pass !== confirm) {
+      setupErrorMsg.textContent = "Passwords do not match.";
       return;
     }
 
-    if (res.isLocked) {
-      switchView('locked');
-    } else {
-      switchView('unlocked');
-      const settings = res.settings || {};
-      settingIdleTimeout.value = typeof settings.idleTimeout === 'number' ? settings.idleTimeout : 5;
-      settingGracePeriod.value = typeof settings.gracePeriod === 'number' ? settings.gracePeriod : 0;
+    setupSubmitBtn.disabled = true;
+    setupSubmitBtn.textContent = "Saving...";
+
+    try {
+      generatedSetupKey = generateRecoveryKey();
+      const passHash = await hashText(pass);
+      const recovHash = await hashText(generatedSetupKey);
+
+      await chrome.storage.local.set({
+        passwordHash: passHash,
+        recoveryHash: recovHash,
+        isLocked: false,
+        idleMinutes: 5,
+        graceMinutes: 0,
+        lockMessage: ""
+      });
+
+      setupKeyText.textContent = generatedSetupKey;
+      showView(setupKeyView);
+    } catch (err) {
+      setupSubmitBtn.disabled = false;
+      setupSubmitBtn.textContent = "Set Master Password";
+      setupErrorMsg.textContent = "Configuration failed. Please retry.";
     }
   });
-}
 
-/* --------------------------------------------------------------------------
-   View 1: Locked View - Compact Authentication Only
-   -------------------------------------------------------------------------- */
-popupUnlockForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const password = popupUnlockPwd.value;
-  if (!password) return;
+  setupCopyKeyBtn.addEventListener("click", async () => {
+    if (!generatedSetupKey) return;
+    try {
+      await navigator.clipboard.writeText(generatedSetupKey);
+      setupCopyKeyBtn.textContent = "✓ Copied";
+      setTimeout(() => { setupCopyKeyBtn.textContent = "📋 Copy"; }, 2000);
+    } catch (_) {}
+  });
 
-  chrome.runtime.sendMessage({ action: 'VERIFY_AND_UNLOCK', password }, (res) => {
-    if (res && res.success) {
-      popupUnlockError.classList.add('hidden');
-      popupUnlockPwd.value = '';
-      initPopup(); // Transitions to unlocked settings view
-    } else {
-      popupUnlockError.classList.remove('hidden');
-      if (res && res.lockedOut) {
-        popupUnlockError.textContent = 'Too many failed attempts. Security cooldown active.';
-      } else {
-        const remaining = res ? (5 - (res.failedAttempts || 0)) : '';
-        popupUnlockError.textContent = remaining > 0 
-          ? `Incorrect password. ${remaining} attempts remaining.` 
-          : 'Incorrect password.';
+  setupDownloadKeyBtn.addEventListener("click", () => {
+    if (!generatedSetupKey) return;
+    triggerDownload(generatedSetupKey);
+    setupDownloadKeyBtn.textContent = "✓ Downloaded";
+    setTimeout(() => { setupDownloadKeyBtn.textContent = "💾 Download"; }, 2000);
+  });
+
+  setupFinishBtn.addEventListener("click", () => {
+    generatedSetupKey = null;
+    setStatusBadge(false);
+    idleMinutesInput.value = 5;
+    graceMinutesInput.value = 0;
+    lockMessageInput.value = "";
+    showView(mainDashboardView);
+    showToast("Master password active!");
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  //  QUICK LOCK NOW ACTION
+  // ══════════════════════════════════════════════════════════════
+  lockNowBtn.addEventListener("click", async () => {
+    lockNowBtn.disabled = true;
+    lockNowBtn.textContent = "Locking...";
+
+    try {
+      await chrome.runtime.sendMessage({ action: "LOCK_BROWSER" });
+      setStatusBadge(true);
+      window.close(); // Close extension popup cleanly
+    } catch (err) {
+      lockNowBtn.disabled = false;
+      lockNowBtn.textContent = "🔒 Lock Browser Now";
+      showToast("Lock request failed.");
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  //  SAVE SETTINGS
+  // ══════════════════════════════════════════════════════════════
+  saveSettingsBtn.addEventListener("click", async () => {
+    saveSettingsBtn.disabled = true;
+    saveSettingsBtn.textContent = "Saving...";
+
+    const idleMins = parseInt(idleMinutesInput.value, 10) || 5;
+    const graceMins = parseInt(graceMinutesInput.value, 10) || 0;
+    const customMessage = lockMessageInput.value.trim();
+
+    try {
+      await chrome.runtime.sendMessage({
+        action: "UPDATE_SETTINGS",
+        idleMinutes: idleMins,
+        graceMinutes: graceMins,
+        lockMessage: customMessage
+      });
+      showToast("Settings saved successfully");
+    } catch (_) {
+      showToast("Failed to save settings");
+    }
+
+    saveSettingsBtn.disabled = false;
+    saveSettingsBtn.textContent = "Save Settings";
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  //  CHANGE MASTER PASSWORD
+  // ══════════════════════════════════════════════════════════════
+  openChangePassBtn.addEventListener("click", () => {
+    changePasswordForm.reset();
+    changePasswordError.textContent = "";
+    showView(changePasswordView);
+    currentPasswordInput.focus();
+  });
+
+  cancelChangePassBtn.addEventListener("click", () => {
+    showView(mainDashboardView);
+  });
+
+  changePasswordForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    changePasswordError.textContent = "";
+
+    const currentPass = currentPasswordInput.value;
+    const newPass = newPasswordInput.value;
+    const confirmNew = confirmNewPasswordInput.value;
+
+    if (newPass.length < 4) {
+      changePasswordError.textContent = "New password must be at least 4 characters.";
+      return;
+    }
+    if (newPass !== confirmNew) {
+      changePasswordError.textContent = "New passwords do not match.";
+      return;
+    }
+
+    saveChangePassBtn.disabled = true;
+    saveChangePassBtn.textContent = "Updating...";
+
+    try {
+      const store = await chrome.storage.local.get(["passwordHash"]);
+      const checkHash = await hashText(currentPass);
+
+      if (checkHash !== store.passwordHash) {
+        changePasswordError.textContent = "Current password is incorrect.";
+        saveChangePassBtn.disabled = false;
+        saveChangePassBtn.textContent = "Update";
+        currentPasswordInput.focus();
+        return;
       }
-      popupUnlockPwd.select();
+
+      const updatedHash = await hashText(newPass);
+      await chrome.storage.local.set({ passwordHash: updatedHash });
+
+      changePasswordForm.reset();
+      showView(mainDashboardView);
+      showToast("Password updated!");
+    } catch (err) {
+      changePasswordError.textContent = "Error updating password.";
+    } finally {
+      saveChangePassBtn.disabled = false;
+      saveChangePassBtn.textContent = "Update";
     }
   });
-});
 
-/* --------------------------------------------------------------------------
-   View 2: Unlocked View - Settings & Credentials Management
-   -------------------------------------------------------------------------- */
-btnLockNow.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'LOCK' }, () => {
-    window.close();
+  // ══════════════════════════════════════════════════════════════
+  //  REGENERATE RECOVERY KEY
+  // ══════════════════════════════════════════════════════════════
+  openRegenKeyBtn.addEventListener("click", () => {
+    regenKeyForm.reset();
+    regenKeyError.textContent = "";
+    showView(regenKeyView);
+    regenPasswordInput.focus();
   });
-});
 
-popupSettingsForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const idleTimeout = Math.max(1, parseInt(settingIdleTimeout.value, 10) || 5);
-  const gracePeriod = Math.max(0, parseInt(settingGracePeriod.value, 10) || 0);
+  cancelRegenKeyBtn.addEventListener("click", () => {
+    showView(mainDashboardView);
+  });
 
-  const updatedSettings = {
-    idleTimeout,
-    idleEnabled: true,
-    gracePeriod
-  };
+  regenKeyForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    regenKeyError.textContent = "";
 
-  chrome.runtime.sendMessage({ action: 'UPDATE_SETTINGS', settings: updatedSettings }, (res) => {
-    if (res && res.success) {
-      settingsFeedback.classList.remove('hidden');
-      setTimeout(() => settingsFeedback.classList.add('hidden'), 2500);
+    const pass = regenPasswordInput.value;
+    if (!pass) return;
+
+    confirmRegenKeyBtn.disabled = true;
+    confirmRegenKeyBtn.textContent = "Verifying...";
+
+    try {
+      const store = await chrome.storage.local.get(["passwordHash"]);
+      const checkHash = await hashText(pass);
+
+      if (checkHash !== store.passwordHash) {
+        regenKeyError.textContent = "Incorrect master password.";
+        confirmRegenKeyBtn.disabled = false;
+        confirmRegenKeyBtn.textContent = "Generate";
+        regenPasswordInput.focus();
+        return;
+      }
+
+      activeNewRecoveryKey = generateRecoveryKey();
+      const newRecovHash = await hashText(activeNewRecoveryKey);
+      await chrome.storage.local.set({ recoveryHash: newRecovHash });
+
+      newKeyDisplay.textContent = activeNewRecoveryKey;
+      regenKeyForm.reset();
+      showView(displayNewKeyView);
+    } catch (err) {
+      regenKeyError.textContent = "Failed to regenerate recovery key.";
+    } finally {
+      confirmRegenKeyBtn.disabled = false;
+      confirmRegenKeyBtn.textContent = "Generate";
     }
   });
-});
 
-popupChangePwdForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const current = changeCurrentPwd.value;
-  const newPwd = changeNewPwd.value;
-  const confirmPwd = changeConfirmPwd.value;
-
-  if (newPwd.length < 8) {
-    changePwdError.classList.remove('hidden');
-    changePwdError.textContent = 'New password must be at least 8 characters.';
-    return;
-  }
-  if (newPwd !== confirmPwd) {
-    changePwdError.classList.remove('hidden');
-    changePwdError.textContent = 'New passwords do not match.';
-    return;
-  }
-
-  const local = await chrome.storage.local.get(['passwordHash', 'passwordSalt']);
-  const isValid = await verifyPassword(current, local.passwordHash, local.passwordSalt);
-
-  if (!isValid) {
-    changePwdError.classList.remove('hidden');
-    changePwdError.textContent = 'Current password is incorrect.';
-    changeCurrentPwd.select();
-    return;
-  }
-
-  const salt = generateSalt(16);
-  const passwordHash = await hashWithSalt(newPwd, salt);
-
-  await chrome.storage.local.set({
-    passwordHash,
-    passwordSalt: salt,
-    failedAttempts: 0,
-    lockoutUntil: 0
+  copyNewKeyBtn.addEventListener("click", async () => {
+    if (!activeNewRecoveryKey) return;
+    try {
+      await navigator.clipboard.writeText(activeNewRecoveryKey);
+      copyNewKeyBtn.textContent = "✓ Copied";
+      setTimeout(() => { copyNewKeyBtn.textContent = "📋 Copy"; }, 2000);
+    } catch (_) {}
   });
 
-  changeCurrentPwd.value = '';
-  changeNewPwd.value = '';
-  changeConfirmPwd.value = '';
-  changePwdError.classList.remove('hidden');
-  changePwdError.style.color = '#4ade80';
-  changePwdError.textContent = 'Password updated successfully.';
-  setTimeout(() => {
-    changePwdError.classList.add('hidden');
-    changePwdError.style.color = '';
-  }, 2500);
-});
-
-btnFactoryReset.addEventListener('click', () => {
-  const confirmed = window.confirm(
-    'Reset Browser-Locker to factory defaults?\n\nAll passwords and settings will be permanently erased.'
-  );
-
-  if (confirmed) {
-    chrome.runtime.sendMessage({ action: 'FACTORY_RESET' }, () => {
-      initPopup();
-    });
-  }
-});
-
-/* --------------------------------------------------------------------------
-   View 3: Setup View - Onboarding Flow
-   -------------------------------------------------------------------------- */
-popupSetupForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const pwd = setupMasterPwd.value;
-  const confirm = setupMasterConfirm.value;
-
-  if (pwd.length < 8) {
-    setupError.classList.remove('hidden');
-    setupError.textContent = 'Password must be at least 8 characters.';
-    return;
-  }
-  if (pwd !== confirm) {
-    setupError.classList.remove('hidden');
-    setupError.textContent = 'Passwords do not match.';
-    return;
-  }
-
-  setupError.classList.add('hidden');
-  currentGeneratedWizardKey = generateRecoveryKey();
-  popupSetupKey.textContent = currentGeneratedWizardKey;
-
-  popupSetupForm.classList.add('hidden');
-  popupSetupRecoveryStep.classList.remove('hidden');
-});
-
-popupCopyKeyBtn.addEventListener('click', async () => {
-  await navigator.clipboard.writeText(currentGeneratedWizardKey);
-  popupCopyKeyBtn.textContent = 'Copied!';
-  setTimeout(() => { popupCopyKeyBtn.textContent = 'Copy'; }, 2000);
-});
-
-popupDlKeyBtn.addEventListener('click', () => {
-  downloadText('browser-locker-recovery-key.txt', `BROWSER-LOCKER RECOVERY KEY:\n${currentGeneratedWizardKey}\n\nKeep this offline.`);
-});
-
-popupSetupAck.addEventListener('change', () => {
-  btnPopupSetupFinish.disabled = !popupSetupAck.checked;
-});
-
-btnPopupSetupFinish.addEventListener('click', async () => {
-  const pwd = setupMasterPwd.value;
-  const salt = generateSalt(16);
-  const passwordHash = await hashWithSalt(pwd, salt);
-
-  const recSalt = generateSalt(16);
-  const recHash = await hashWithSalt(currentGeneratedWizardKey, recSalt);
-
-  await chrome.storage.local.set({
-    isConfigured: true,
-    isLocked: false,
-    passwordHash,
-    passwordSalt: salt,
-    recoveryHash: recHash,
-    recoverySalt: recSalt,
-    failedAttempts: 0,
-    lockoutUntil: 0,
-    lastActiveTimestamp: Date.now()
+  downloadNewKeyBtn.addEventListener("click", () => {
+    if (!activeNewRecoveryKey) return;
+    triggerDownload(activeNewRecoveryKey);
+    downloadNewKeyBtn.textContent = "✓ Downloaded";
+    setTimeout(() => { downloadNewKeyBtn.textContent = "💾 Download"; }, 2000);
   });
 
-  chrome.runtime.sendMessage({ action: 'SETUP_COMPLETED' }, () => {
-    initPopup();
+  finishNewKeyBtn.addEventListener("click", () => {
+    activeNewRecoveryKey = null;
+    showView(mainDashboardView);
+    showToast("Recovery key refreshed");
   });
-});
 
-// Run initialization on DOM load
-document.addEventListener('DOMContentLoaded', initPopup);
+  // Run initialization
+  init();
+})();
